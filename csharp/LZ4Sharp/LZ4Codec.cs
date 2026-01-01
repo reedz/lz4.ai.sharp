@@ -1,0 +1,375 @@
+/*
+ * LZ4 - Fast LZ compression algorithm
+ * C# Implementation
+ * Copyright (c) 2026. Translated from C implementation by Yann Collet.
+ * 
+ * BSD 2-Clause License (http://www.opensource.org/licenses/bsd-license.php)
+ * 
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are
+ * met:
+ * 
+ *     * Redistributions of source code must retain the above copyright
+ * notice, this list of conditions and the following disclaimer.
+ *     * Redistributions in binary form must reproduce the above
+ * copyright notice, this list of conditions and the following disclaimer
+ * in the documentation and/or other materials provided with the
+ * distribution.
+ * 
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+using System;
+using System.Runtime.CompilerServices;
+
+namespace LZ4Sharp
+{
+    /// <summary>
+    /// LZ4 Codec - Fast compression and decompression
+    /// </summary>
+    public static class LZ4Codec
+    {
+        // Constants from the C implementation
+        private const int MINMATCH = 4;
+        private const int WILDCOPYLENGTH = 8;
+        private const int LASTLITERALS = 5;
+        private const int MFLIMIT = WILDCOPYLENGTH + MINMATCH;
+        private const int ML_BITS = 4;
+        private const int ML_MASK = (1 << ML_BITS) - 1;
+        private const int RUN_BITS = 8 - ML_BITS;
+        private const int RUN_MASK = (1 << RUN_BITS) - 1;
+        private const int ACCELERATION_DEFAULT = 1;
+        private const int ACCELERATION_MAX = 65537;
+        private const int HASH_LOG = 12;
+        private const int HASH_SIZE = 1 << HASH_LOG;
+        private const int LZ4_64KLIMIT = (64 * 1024) + (MFLIMIT - 1);
+        private const int LZ4_DISTANCE_MAX = 65535;
+
+        /// <summary>
+        /// Gets the maximum compressed size for a given input size
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static int CompressBound(int inputSize)
+        {
+            return inputSize + (inputSize / 255) + 16;
+        }
+
+        /// <summary>
+        /// Compress data using LZ4 algorithm with default acceleration
+        /// </summary>
+        /// <param name="source">Source data to compress</param>
+        /// <param name="destination">Destination buffer for compressed data</param>
+        /// <param name="sourceSize">Size of source data</param>
+        /// <param name="maxDestinationSize">Maximum size of destination buffer</param>
+        /// <returns>Size of compressed data, or negative value on error</returns>
+        public static int CompressDefault(byte[] source, byte[] destination, int sourceSize, int maxDestinationSize)
+        {
+            return CompressFast(source, destination, sourceSize, maxDestinationSize, ACCELERATION_DEFAULT);
+        }
+
+        /// <summary>
+        /// Compress data using LZ4 algorithm
+        /// </summary>
+        /// <param name="source">Source data to compress</param>
+        /// <param name="destination">Destination buffer for compressed data</param>
+        /// <param name="sourceSize">Size of source data</param>
+        /// <param name="maxDestinationSize">Maximum size of destination buffer</param>
+        /// <param name="acceleration">Acceleration factor (1 = default, higher = faster but less compression)</param>
+        /// <returns>Size of compressed data, or negative value on error</returns>
+        public static int CompressFast(byte[] source, byte[] destination, int sourceSize, int maxDestinationSize, int acceleration)
+        {
+            if (source == null || destination == null || sourceSize <= 0 || maxDestinationSize <= 0)
+                return -1;
+
+            if (acceleration < 1) acceleration = ACCELERATION_DEFAULT;
+            if (acceleration > ACCELERATION_MAX) acceleration = ACCELERATION_MAX;
+
+            return CompressGeneric(source, destination, sourceSize, maxDestinationSize, acceleration);
+        }
+
+        /// <summary>
+        /// Decompress LZ4 compressed data safely
+        /// </summary>
+        /// <param name="source">Compressed source data</param>
+        /// <param name="destination">Destination buffer for decompressed data</param>
+        /// <param name="compressedSize">Size of compressed data</param>
+        /// <param name="maxDecompressedSize">Maximum size of decompressed data</param>
+        /// <returns>Size of decompressed data, or negative value on error</returns>
+        public static int DecompressSafe(byte[] source, byte[] destination, int compressedSize, int maxDecompressedSize)
+        {
+            if (source == null || destination == null || compressedSize < 0 || maxDecompressedSize < 0)
+                return -1;
+
+            return DecompressGeneric(source, destination, compressedSize, maxDecompressedSize);
+        }
+
+        private static int CompressGeneric(byte[] source, byte[] destination, int srcSize, int dstCapacity, int acceleration)
+        {
+            int srcPos = 0;
+            int dstPos = 0;
+            int anchor = 0;
+
+            int srcLimit = srcSize - MFLIMIT;
+            int dstEnd = dstCapacity;
+
+            if (srcSize < MINMATCH + 1)
+            {
+                // Handle small input
+                return CompressSmall(source, destination, srcSize, dstCapacity);
+            }
+
+            // Hash table for finding matches
+            int[] hashTable = new int[HASH_SIZE];
+            Array.Fill(hashTable, -1);
+
+            srcPos++;
+
+            while (srcPos < srcLimit)
+            {
+                int forwardPos = srcPos;
+                int step = 1;
+                int searchMatchNb = acceleration << 6;
+
+                // Find a match
+                int matchPos = -1;
+                do
+                {
+                    int hash = HashPosition(source, forwardPos);
+                    int candidate = hashTable[hash];
+                    hashTable[hash] = forwardPos;
+
+                    if (candidate >= 0 && forwardPos - candidate <= LZ4_DISTANCE_MAX)
+                    {
+                        if (AreEqual(source, candidate, forwardPos, MINMATCH))
+                        {
+                            matchPos = candidate;
+                            break;
+                        }
+                    }
+
+                    forwardPos += step;
+                    step = searchMatchNb++ >> 6;
+                } while (forwardPos < srcLimit);
+
+                if (matchPos < 0)
+                {
+                    // No match found, encode remaining as literals
+                    break;
+                }
+
+                // Encode literal length
+                int litLength = forwardPos - anchor;
+                int tokenPos = dstPos++;
+
+                if (dstPos + litLength + 2 + 1 + LASTLITERALS > dstEnd)
+                    return 0; // Not enough space
+
+                int token;
+                if (litLength >= RUN_MASK)
+                {
+                    token = RUN_MASK << ML_BITS;
+                    destination[tokenPos] = (byte)token;
+                    int len = litLength - RUN_MASK;
+                    for (; len >= 255; len -= 255)
+                        destination[dstPos++] = 255;
+                    destination[dstPos++] = (byte)len;
+                }
+                else
+                {
+                    token = litLength << ML_BITS;
+                    destination[tokenPos] = (byte)token;
+                }
+
+                // Copy literals
+                WildCopy(source, destination, anchor, dstPos, litLength);
+                dstPos += litLength;
+
+                // Encode offset
+                int offset = forwardPos - matchPos;
+                destination[dstPos++] = (byte)offset;
+                destination[dstPos++] = (byte)(offset >> 8);
+
+                // Find match length
+                int matchLength = MINMATCH + CountMatch(source, matchPos + MINMATCH, forwardPos + MINMATCH, srcSize);
+
+                // Encode match length
+                if (matchLength >= ML_MASK + MINMATCH)
+                {
+                    destination[tokenPos] |= (byte)ML_MASK;
+                    int len = matchLength - (ML_MASK + MINMATCH);
+                    for (; len >= 255; len -= 255)
+                        destination[dstPos++] = 255;
+                    destination[dstPos++] = (byte)len;
+                }
+                else
+                {
+                    destination[tokenPos] |= (byte)(matchLength - MINMATCH);
+                }
+
+                // Move forward
+                srcPos = forwardPos + matchLength;
+                anchor = srcPos;
+
+                // Update hash table for positions we skipped
+                if (srcPos < srcLimit)
+                {
+                    hashTable[HashPosition(source, srcPos - 2)] = srcPos - 2;
+                }
+            }
+
+            // Encode last literals
+            int lastLiterals = srcSize - anchor;
+            if (dstPos + lastLiterals + 1 + ((lastLiterals >= RUN_MASK) ? ((lastLiterals - RUN_MASK) / 255 + 1) : 0) > dstEnd)
+                return 0;
+
+            if (lastLiterals >= RUN_MASK)
+            {
+                destination[dstPos++] = (byte)(RUN_MASK << ML_BITS);
+                int len = lastLiterals - RUN_MASK;
+                for (; len >= 255; len -= 255)
+                    destination[dstPos++] = 255;
+                destination[dstPos++] = (byte)len;
+            }
+            else
+            {
+                destination[dstPos++] = (byte)(lastLiterals << ML_BITS);
+            }
+
+            Array.Copy(source, anchor, destination, dstPos, lastLiterals);
+            dstPos += lastLiterals;
+
+            return dstPos;
+        }
+
+        private static int CompressSmall(byte[] source, byte[] destination, int srcSize, int dstCapacity)
+        {
+            if (dstCapacity < srcSize + 1)
+                return 0;
+
+            destination[0] = (byte)(srcSize << ML_BITS);
+            Array.Copy(source, 0, destination, 1, srcSize);
+            return srcSize + 1;
+        }
+
+        private static int DecompressGeneric(byte[] source, byte[] destination, int srcSize, int dstSize)
+        {
+            int srcPos = 0;
+            int dstPos = 0;
+
+            while (srcPos < srcSize)
+            {
+                // Read token
+                int token = source[srcPos++];
+                int literalLength = token >> ML_BITS;
+
+                // Decode literal length
+                if (literalLength == RUN_MASK)
+                {
+                    int len;
+                    do
+                    {
+                        if (srcPos >= srcSize) return -1;
+                        len = source[srcPos++];
+                        literalLength += len;
+                    } while (len == 255);
+                }
+
+                // Copy literals
+                if (dstPos + literalLength > dstSize || srcPos + literalLength > srcSize)
+                    return -1;
+
+                Array.Copy(source, srcPos, destination, dstPos, literalLength);
+                srcPos += literalLength;
+                dstPos += literalLength;
+
+                if (srcPos >= srcSize)
+                    break; // End of input
+
+                // Read offset
+                if (srcPos + 2 > srcSize)
+                    return -1;
+
+                int offset = source[srcPos] | (source[srcPos + 1] << 8);
+                srcPos += 2;
+
+                if (offset == 0 || offset > dstPos)
+                    return -1;
+
+                int matchPos = dstPos - offset;
+
+                // Decode match length
+                int matchLength = (token & ML_MASK) + MINMATCH;
+
+                if ((token & ML_MASK) == ML_MASK)
+                {
+                    int len;
+                    do
+                    {
+                        if (srcPos >= srcSize) return -1;
+                        len = source[srcPos++];
+                        matchLength += len;
+                    } while (len == 255);
+                }
+
+                // Copy match
+                if (dstPos + matchLength > dstSize)
+                    return -1;
+
+                // Handle overlapping copy
+                for (int i = 0; i < matchLength; i++)
+                {
+                    destination[dstPos++] = destination[matchPos++];
+                }
+            }
+
+            return dstPos;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static int HashPosition(byte[] source, int pos)
+        {
+            uint value = BitConverter.ToUInt32(source, pos);
+            return (int)((value * 2654435761u) >> (32 - HASH_LOG));
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool AreEqual(byte[] source, int pos1, int pos2, int length)
+        {
+            for (int i = 0; i < length; i++)
+            {
+                if (source[pos1 + i] != source[pos2 + i])
+                    return false;
+            }
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static int CountMatch(byte[] source, int pos1, int pos2, int limit)
+        {
+            int count = 0;
+            while (pos2 < limit && source[pos1] == source[pos2])
+            {
+                pos1++;
+                pos2++;
+                count++;
+            }
+            return count;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void WildCopy(byte[] source, byte[] destination, int srcPos, int dstPos, int length)
+        {
+            Array.Copy(source, srcPos, destination, dstPos, length);
+        }
+    }
+}
