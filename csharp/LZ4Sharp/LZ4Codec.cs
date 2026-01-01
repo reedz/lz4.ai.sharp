@@ -338,6 +338,8 @@ namespace LZ4Sharp
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static int HashPosition(byte[] source, int pos)
         {
+            if (pos + 4 > source.Length)
+                return 0;
             uint value = BitConverter.ToUInt32(source, pos);
             return (int)((value * 2654435761u) >> (32 - HASH_LOG));
         }
