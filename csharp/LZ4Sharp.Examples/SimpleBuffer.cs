@@ -21,6 +21,12 @@ namespace LZ4Sharp.Examples
 
         static void Main(string[] args)
         {
+            if (args.Length > 0 && args[0].ToLower() == "demo")
+            {
+                CompressionDemo.RunDemo();
+                return;
+            }
+
             /* Introduction */
             // Below we will have a Compression and Decompression section to demonstrate.
             // There are a few important notes before we start:

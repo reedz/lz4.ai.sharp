@@ -25,9 +25,22 @@ dotnet build
 
 ## Running Examples
 
+### Simple Buffer Example
+
+Basic compression and decompression example:
+
 ```bash
-cd csharp/LZ4Sharp.Examples
-dotnet run
+cd csharp
+dotnet run --project LZ4Sharp.Examples/LZ4Sharp.Examples.csproj
+```
+
+### Compression Demo (Multiple Tests & Benchmarks)
+
+Run comprehensive compression tests with different data patterns and performance benchmarks:
+
+```bash
+cd csharp
+dotnet run --project LZ4Sharp.Examples/LZ4Sharp.Examples.csproj demo
 ```
 
 ## Usage
@@ -146,6 +159,20 @@ Validation done. The string we ended up with is:
 Lorem ipsum dolor sit amet, consectetur adipiscing elit. Lorem ipsum dolor site amat.
 
 Success! LZ4 compression and decompression completed successfully.
+```
+
+### Compression Demo Output
+
+The demo shows various compression scenarios:
+
+```
+=== LZ4Sharp Compression Demonstration ===
+
+Test 1: Simple String Compression
+Test 2: Repeated Pattern (High Compression - ~98% space savings)
+Test 3: Random Data (Low Compression)
+Test 4: Large Data (100KB with patterns - ~99% space savings)
+Test 5: Performance Benchmark (~300+ MB/s)
 ```
 
 ## Future Enhancements
