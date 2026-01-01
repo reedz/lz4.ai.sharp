@@ -10,7 +10,7 @@ permissions:
 
 concurrency:
   cancel-in-progress: true
-  group: ${{ github.workflow }}-${{ github.head_ref }}
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
 
 jobs:
   build-and-test:
@@ -22,10 +22,10 @@ jobs:
     
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
     
     - name: Setup .NET
-      uses: actions/setup-dotnet@v4
+      uses: actions/setup-dotnet@6bd055b973d378c177f66e0d0c29c60f25c0f5ba # v4.2.1
       with:
         dotnet-version: '8.0.x'
     
