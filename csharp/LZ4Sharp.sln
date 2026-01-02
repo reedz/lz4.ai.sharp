@@ -9,6 +9,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LZ4Sharp.Examples", "LZ4Sha
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LZ4Sharp.Tests", "LZ4Sharp.Tests\LZ4Sharp.Tests.csproj", "{CBC7F8C1-289B-4BE1-B25D-521A3EF2EA73}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LZ4Sharp.Benchmarks", "LZ4Sharp.Benchmarks\LZ4Sharp.Benchmarks.csproj", "{21F5B4DE-E61D-432D-A0BC-9D1F990E80DD}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -55,6 +57,18 @@ Global
 		{CBC7F8C1-289B-4BE1-B25D-521A3EF2EA73}.Release|x64.Build.0 = Release|Any CPU
 		{CBC7F8C1-289B-4BE1-B25D-521A3EF2EA73}.Release|x86.ActiveCfg = Release|Any CPU
 		{CBC7F8C1-289B-4BE1-B25D-521A3EF2EA73}.Release|x86.Build.0 = Release|Any CPU
+		{21F5B4DE-E61D-432D-A0BC-9D1F990E80DD}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{21F5B4DE-E61D-432D-A0BC-9D1F990E80DD}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{21F5B4DE-E61D-432D-A0BC-9D1F990E80DD}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{21F5B4DE-E61D-432D-A0BC-9D1F990E80DD}.Debug|x64.Build.0 = Debug|Any CPU
+		{21F5B4DE-E61D-432D-A0BC-9D1F990E80DD}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{21F5B4DE-E61D-432D-A0BC-9D1F990E80DD}.Debug|x86.Build.0 = Debug|Any CPU
+		{21F5B4DE-E61D-432D-A0BC-9D1F990E80DD}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{21F5B4DE-E61D-432D-A0BC-9D1F990E80DD}.Release|Any CPU.Build.0 = Release|Any CPU
+		{21F5B4DE-E61D-432D-A0BC-9D1F990E80DD}.Release|x64.ActiveCfg = Release|Any CPU
+		{21F5B4DE-E61D-432D-A0BC-9D1F990E80DD}.Release|x64.Build.0 = Release|Any CPU
+		{21F5B4DE-E61D-432D-A0BC-9D1F990E80DD}.Release|x86.ActiveCfg = Release|Any CPU
+		{21F5B4DE-E61D-432D-A0BC-9D1F990E80DD}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
