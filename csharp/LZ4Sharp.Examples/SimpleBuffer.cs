@@ -33,6 +33,12 @@ namespace LZ4Sharp.Examples
                 return;
             }
 
+            if (args.Length > 0 && args[0].ToLower() == "xxhash")
+            {
+                XXHashExample.Run();
+                return;
+            }
+
             /* Introduction */
             // Below we will have a Compression and Decompression section to demonstrate.
             // There are a few important notes before we start:
