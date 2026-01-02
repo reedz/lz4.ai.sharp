@@ -96,3 +96,6 @@ artifacts/
 
 # Other
 .DS_Store
+
+# BenchmarkDotNet
+BenchmarkDotNet.Artifacts/

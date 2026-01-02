@@ -26,6 +26,12 @@ namespace LZ4Sharp.Examples
                 CompressionDemo.RunDemo();
                 return;
             }
+            
+            if (args.Length > 0 && args[0].ToLower() == "hc")
+            {
+                HighCompressionExample.Run();
+                return;
+            }
 
             /* Introduction */
             // Below we will have a Compression and Decompression section to demonstrate.

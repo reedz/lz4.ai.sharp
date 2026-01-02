@@ -121,24 +121,46 @@ Results from test scenarios:
 The C# implementation produces output compatible with the C implementation for basic use cases. However, note:
 
 - ✓ Basic block compression/decompression compatible
-- ✗ Frame format not implemented (requires lz4frame.c translation)
+- ✓ .NET 10 support
+- ✓ Comprehensive benchmark suite comparing against K4os.Compression.LZ4
+- ✗ Frame format not implemented (requires lz4frame.c translation - 2165 lines)
 - ✗ Streaming API not implemented
 - ✗ Dictionary support not implemented
-- ✗ HC (High Compression) mode not implemented
+- ✗ HC (High Compression) mode not implemented (requires lz4hc.c translation - 2255 lines)
+- ✗ XXHash not implemented (requires xxhash.c translation - 1030 lines)
+
+## Benchmark Results
+
+Performance benchmarks comparing LZ4Sharp against K4os.Compression.LZ4 on .NET 10:
+
+| Operation       | Data Size | LZ4Sharp  | K4os.LZ4 | Ratio |
+|-----------------|-----------|-----------|----------|-------|
+| Compression     | 10 KB     | 11.7 μs   | 2.6 μs   | 4.5x  |
+| Compression     | 100 KB    | 147.4 μs  | 24.1 μs  | 6.1x  |
+| Decompression   | 10 KB     | 7.1 μs    | 1.5 μs   | 2.8x  |
+| Decompression   | 100 KB    | 125.2 μs  | 63.2 μs  | 5.2x  |
+
+**Analysis:**
+- LZ4Sharp achieves ~694 MB/s compression and ~818 MB/s decompression (100KB data)
+- K4os.LZ4 achieves ~4,251 MB/s compression and ~1,620 MB/s decompression (100KB data)
+- Performance difference is expected as LZ4Sharp prioritizes code clarity while K4os.LZ4 uses unsafe code and SIMD optimizations
+
+See [LZ4Sharp.Benchmarks/README.md](LZ4Sharp.Benchmarks/README.md) for detailed benchmark results.
 
 ## Future Enhancements
 
 Potential improvements for future versions:
 
-1. **LZ4 Frame Format**: Implement full frame format support
-2. **Streaming**: Add streaming compression/decompression
-3. **High Compression**: Translate LZ4_HC algorithm
-4. **Performance**: 
+1. **LZ4 Frame Format**: Implement full frame format support (translate lz4frame.c)
+2. **XXHash**: Translate XXHash implementation (needed for frame format)
+3. **High Compression**: Translate LZ4_HC algorithm (translate lz4hc.c)
+4. **Streaming**: Add streaming compression/decompression
+5. **Performance**: 
    - Use Span<T> and Memory<T> for better performance
    - SIMD optimizations where applicable
    - Unsafe code for pointer-based operations
-5. **Dictionary**: Add dictionary compression support
-6. **Multi-threading**: Parallel compression for large data
+6. **Dictionary**: Add dictionary compression support
+7. **Multi-threading**: Parallel compression for large data
 
 ## References
 
@@ -146,6 +168,7 @@ Potential improvements for future versions:
 - **LZ4 Block Format**: doc/lz4_Block_format.md
 - **LZ4 Frame Format**: doc/lz4_Frame_format.md
 - **LZ4 Homepage**: http://www.lz4.org
+- **K4os.Compression.LZ4**: https://github.com/MiloszKrajewski/K4os.Compression.LZ4
 
 ## License
 
