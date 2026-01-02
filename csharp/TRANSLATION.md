@@ -28,6 +28,23 @@ The C# implementation was created by translating the core LZ4 compression algori
 | `LZ4_compress_generic()` | `CompressGeneric()` | Core compression algorithm |
 | `LZ4_decompress_generic()` | `DecompressGeneric()` | Core decompression algorithm |
 
+### XXHash Algorithm (lib/xxhash.c → XXHash.cs)
+
+| C Function | C# Method | Purpose |
+|------------|-----------|---------|
+| `XXH32()` | `XXH32()` | One-shot 32-bit hash calculation |
+| `XXH32_createState()` | `new XXH32State()` | Create streaming state |
+| `XXH32_reset()` | `Reset()` | Reset state with new seed |
+| `XXH32_update()` | `Update()` | Add data to streaming hash |
+| `XXH32_digest()` | `Digest()` | Get final hash value |
+
+The XXHash implementation includes:
+- Complete XXH32 algorithm with all prime constants
+- Streaming support for large data
+- Proper avalanche finalization
+- Full compatibility with C reference implementation
+- 19 comprehensive unit tests
+
 ### Examples (examples/simple_buffer.c → SimpleBuffer.cs)
 
 The simple buffer example was translated line-by-line, demonstrating:
@@ -80,6 +97,7 @@ LZ4_DISTANCE_MAX = 65535  // Maximum match distance
 
 The C# implementation includes comprehensive unit tests covering:
 
+**LZ4 Codec Tests (18 tests):**
 - ✓ Simple string compression/decompression
 - ✓ Repeated patterns (high compression ratio)
 - ✓ Random data (low compression ratio)
@@ -88,7 +106,18 @@ The C# implementation includes comprehensive unit tests covering:
 - ✓ Edge cases (empty data, null inputs)
 - ✓ Error handling (invalid data, insufficient buffers)
 
-**Test Results**: 10/10 passing
+**XXHash Tests (19 tests):**
+- ✓ Empty inputs with various seeds
+- ✓ Simple and complex strings
+- ✓ Binary data patterns
+- ✓ Small inputs (0-15 bytes edge cases)
+- ✓ Large inputs (1000+ bytes)
+- ✓ One-shot vs streaming consistency
+- ✓ State management (reset, update, digest)
+- ✓ All byte lengths (0-32) for edge case coverage
+- ✓ Hash value verification against C reference
+
+**Test Results**: 37/37 passing
 
 ## Performance
 
@@ -123,11 +152,11 @@ The C# implementation produces output compatible with the C implementation for b
 - ✓ Basic block compression/decompression compatible
 - ✓ .NET 10 support
 - ✓ Comprehensive benchmark suite comparing against K4os.Compression.LZ4
+- ✓ XXHash (XXH32) fully implemented with streaming support
 - ✗ Frame format not implemented (requires lz4frame.c translation - 2165 lines)
 - ✗ Streaming API not implemented
 - ✗ Dictionary support not implemented
 - ✗ HC (High Compression) mode not implemented (requires lz4hc.c translation - 2255 lines)
-- ✗ XXHash not implemented (requires xxhash.c translation - 1030 lines)
 
 ## Benchmark Results
 
@@ -151,16 +180,23 @@ See [LZ4Sharp.Benchmarks/README.md](LZ4Sharp.Benchmarks/README.md) for detailed 
 
 Potential improvements for future versions:
 
-1. **LZ4 Frame Format**: Implement full frame format support (translate lz4frame.c)
-2. **XXHash**: Translate XXHash implementation (needed for frame format)
-3. **High Compression**: Translate LZ4_HC algorithm (translate lz4hc.c)
-4. **Streaming**: Add streaming compression/decompression
-5. **Performance**: 
+1. **LZ4 High Compression**: Translate LZ4_HC algorithm (translate lz4hc.c - 2255 lines)
+   - Hash chain match finding
+   - Multiple compression levels (3-12)
+   - Optimal parsing for levels 10+
+   - Better compression ratios at cost of speed
+2. **LZ4 Frame Format**: Implement full frame format support (translate lz4frame.c - 2165 lines)
+   - Frame header/footer handling
+   - Block dependencies
+   - Checksum verification (uses XXHash ✓)
+   - Compatible with lz4 CLI tool
+3. **Streaming**: Add streaming compression/decompression
+4. **Performance**: 
    - Use Span<T> and Memory<T> for better performance
    - SIMD optimizations where applicable
    - Unsafe code for pointer-based operations
-6. **Dictionary**: Add dictionary compression support
-7. **Multi-threading**: Parallel compression for large data
+5. **Dictionary**: Add dictionary compression support
+6. **Multi-threading**: Parallel compression for large data
 
 ## References
 

@@ -12,12 +12,16 @@ multiple GB/s per core, typically reaching RAM speed limits on multi-core system
 
 - **LZ4Sharp**: Class library containing the LZ4 compression/decompression implementation (.NET 10)
   - `LZ4Codec.cs`: Core compression and decompression algorithms
+  - `XXHash.cs`: XXHash (XXH32) fast hash algorithm
   
 - **LZ4Sharp.Examples**: Console application with usage examples (.NET 10)
   - `SimpleBuffer.cs`: Simple compression/decompression example (translated from C's simple_buffer.c)
+  - `CompressionDemo.cs`: Comprehensive compression tests
+  - `XXHashExample.cs`: XXHash demonstration
 
 - **LZ4Sharp.Tests**: Unit tests using xUnit (.NET 10)
-  - `LZ4CodecTests.cs`: Comprehensive test suite
+  - `LZ4CodecTests.cs`: Comprehensive test suite (18 tests)
+  - `XXHashTests.cs`: XXHash test suite (19 tests)
 
 - **LZ4Sharp.Benchmarks**: Performance benchmarks using BenchmarkDotNet (.NET 10)
   - Compares LZ4Sharp against K4os.Compression.LZ4
@@ -48,6 +52,15 @@ Run comprehensive compression tests with different data patterns and performance
 ```bash
 cd csharp
 dotnet run --project LZ4Sharp.Examples/LZ4Sharp.Examples.csproj demo
+```
+
+### XXHash Example
+
+Demonstrate XXHash fast hashing algorithm:
+
+```bash
+cd csharp
+dotnet run --project LZ4Sharp.Examples/LZ4Sharp.Examples.csproj xxhash
 ```
 
 ## Running Benchmarks
@@ -152,6 +165,33 @@ Decompress LZ4 compressed data safely.
   - `compressedSize`: Size of compressed data
   - `maxDecompressedSize`: Maximum size of decompressed data
 - **Returns:** Size of decompressed data, or negative value on error
+
+### XXHash.XXH32(byte[] input, uint seed)
+
+Calculate the 32-bit XXHash of input data.
+
+- **Parameters:**
+  - `input`: Input data to hash
+  - `seed`: Seed value (0 for default)
+- **Returns:** 32-bit hash value
+
+### XXHash.XXH32State
+
+Streaming XXHash state for large data.
+
+**Methods:**
+- `XXH32State(uint seed)` - Create new state with seed
+- `Reset(uint seed)` - Reset state with new seed
+- `Update(byte[] input, int length)` - Add data to hash
+- `Digest()` - Get final hash value
+
+**Example:**
+```csharp
+var state = new XXHash.XXH32State(0);
+state.Update(chunk1, chunk1.Length);
+state.Update(chunk2, chunk2.Length);
+uint hash = state.Digest();
+```
 
 ## Implementation Notes
 
