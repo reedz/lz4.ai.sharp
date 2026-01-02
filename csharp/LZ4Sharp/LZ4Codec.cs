@@ -113,6 +113,26 @@ namespace LZ4Sharp
             return DecompressGeneric(source, destination, compressedSize, maxDecompressedSize);
         }
 
+        /// <summary>
+        /// Decompress LZ4 compressed data safely with destination offset
+        /// </summary>
+        /// <param name="source">Compressed source data</param>
+        /// <param name="destination">Destination buffer for decompressed data</param>
+        /// <param name="compressedSize">Size of compressed data</param>
+        /// <param name="maxDecompressedSize">Maximum size of decompressed data</param>
+        /// <param name="dstOffset">Offset in destination buffer to start writing</param>
+        /// <returns>Size of decompressed data, or negative value on error</returns>
+        public static int DecompressSafe(byte[] source, byte[] destination, int compressedSize, int maxDecompressedSize, int dstOffset)
+        {
+            if (source == null || destination == null || compressedSize < 0 || maxDecompressedSize < 0 || dstOffset < 0)
+                return -1;
+
+            if (dstOffset + maxDecompressedSize > destination.Length)
+                return -1;
+
+            return DecompressGenericWithOffset(source, destination, compressedSize, maxDecompressedSize, dstOffset);
+        }
+
         private static int CompressGeneric(byte[] source, byte[] destination, int srcSize, int dstCapacity, int acceleration)
         {
             int srcPos = 0;
@@ -333,6 +353,81 @@ namespace LZ4Sharp
             }
 
             return dstPos;
+        }
+
+        private static int DecompressGenericWithOffset(byte[] source, byte[] destination, int srcSize, int dstSize, int dstOffset)
+        {
+            int srcPos = 0;
+            int dstPos = dstOffset;
+            int dstEnd = dstOffset + dstSize;
+
+            while (srcPos < srcSize)
+            {
+                // Read token
+                int token = source[srcPos++];
+                int literalLength = token >> ML_BITS;
+
+                // Decode literal length
+                if (literalLength == RUN_MASK)
+                {
+                    int len;
+                    do
+                    {
+                        if (srcPos >= srcSize) return -1;
+                        len = source[srcPos++];
+                        literalLength += len;
+                    } while (len == 255);
+                }
+
+                // Copy literals
+                if (dstPos + literalLength > dstEnd || srcPos + literalLength > srcSize)
+                    return -1;
+
+                Array.Copy(source, srcPos, destination, dstPos, literalLength);
+                srcPos += literalLength;
+                dstPos += literalLength;
+
+                if (srcPos >= srcSize)
+                    break; // End of input
+
+                // Read offset
+                if (srcPos + 2 > srcSize)
+                    return -1;
+
+                int offset = source[srcPos] | (source[srcPos + 1] << 8);
+                srcPos += 2;
+
+                if (offset == 0 || offset > (dstPos - dstOffset))
+                    return -1;
+
+                int matchPos = dstPos - offset;
+
+                // Decode match length
+                int matchLength = (token & ML_MASK) + MINMATCH;
+
+                if ((token & ML_MASK) == ML_MASK)
+                {
+                    int len;
+                    do
+                    {
+                        if (srcPos >= srcSize) return -1;
+                        len = source[srcPos++];
+                        matchLength += len;
+                    } while (len == 255);
+                }
+
+                // Copy match
+                if (dstPos + matchLength > dstEnd)
+                    return -1;
+
+                // Handle overlapping copy
+                for (int i = 0; i < matchLength; i++)
+                {
+                    destination[dstPos++] = destination[matchPos++];
+                }
+            }
+
+            return dstPos - dstOffset;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
