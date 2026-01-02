@@ -97,7 +97,13 @@ namespace LZ4Sharp.Benchmarks
                 sb.Append(sampleText);
             }
             
-            return Encoding.UTF8.GetBytes(sb.ToString().Substring(0, size));
+            // Trim to exact size without creating intermediate string
+            if (sb.Length > size)
+            {
+                sb.Length = size;
+            }
+            
+            return Encoding.UTF8.GetBytes(sb.ToString());
         }
     }
 }
