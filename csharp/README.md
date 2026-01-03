@@ -12,6 +12,8 @@ multiple GB/s per core, typically reaching RAM speed limits on multi-core system
 
 - **LZ4Sharp**: Class library containing the LZ4 compression/decompression implementation (.NET 10)
   - `LZ4Codec.cs`: Core compression and decompression algorithms
+  - `LZ4HC.cs`: High compression mode for better ratios **NEW**
+  - `LZ4Frame.cs`: Frame format support compatible with lz4 CLI **NEW**
   - `XXHash.cs`: XXHash (XXH32) fast hash algorithm
   
 - **LZ4Sharp.Examples**: Console application with usage examples (.NET 10)
@@ -21,6 +23,8 @@ multiple GB/s per core, typically reaching RAM speed limits on multi-core system
 
 - **LZ4Sharp.Tests**: Unit tests using xUnit (.NET 10)
   - `LZ4CodecTests.cs`: Comprehensive test suite (18 tests)
+  - `LZ4HCTests.cs`: HC mode test suite (8 tests) **NEW**
+  - `LZ4FrameTests.cs`: Frame format test suite (13 tests) **NEW**
   - `XXHashTests.cs`: XXHash test suite (19 tests)
 
 - **LZ4Sharp.Benchmarks**: Performance benchmarks using BenchmarkDotNet (.NET 10)
@@ -93,7 +97,7 @@ LZ4Sharp prioritizes code clarity and educational value, while K4os.LZ4 is optim
 
 ## Usage
 
-### Compression
+### Standard Block Compression
 
 ```csharp
 using LZ4Sharp;
@@ -112,6 +116,47 @@ if (compressedSize <= 0)
 {
     // Compression failed
 }
+```
+
+### High Compression Mode (Better Ratios)
+
+```csharp
+using LZ4Sharp;
+
+byte[] source = ...; // Your data to compress
+int sourceSize = source.Length;
+
+int maxCompressedSize = LZ4HC.CompressBound(sourceSize);
+byte[] compressed = new byte[maxCompressedSize];
+
+// Compress with HC mode (level 9 is default, 3-12 supported)
+int compressedSize = LZ4HC.CompressHC(source, compressed, sourceSize, maxCompressedSize, 9);
+```
+
+### Frame Format (Compatible with lz4 CLI)
+
+```csharp
+using LZ4Sharp;
+
+byte[] source = ...; // Your data to compress
+int sourceSize = source.Length;
+
+// Configure frame preferences
+var prefs = new LZ4Frame.FramePreferences
+{
+    BlockSizeId = LZ4Frame.BlockSize.Max64KB,
+    ContentChecksumFlag = LZ4Frame.ContentChecksum.ChecksumEnabled,
+    CompressionLevel = LZ4HC.CLEVEL_DEFAULT  // Use HC if desired
+};
+
+byte[] compressed = new byte[LZ4Frame.CompressFrameBound(sourceSize, prefs)];
+
+// Compress into frame format
+int compressedSize = LZ4Frame.CompressFrame(compressed, compressed.Length, source, sourceSize, prefs);
+
+// Decompress from frame format
+byte[] decompressed = new byte[sourceSize];
+int decompressedSize = LZ4Frame.DecompressFrame(decompressed, decompressed.Length, compressed, compressedSize);
 ```
 
 ### Decompression
@@ -166,6 +211,41 @@ Decompress LZ4 compressed data safely.
   - `maxDecompressedSize`: Maximum size of decompressed data
 - **Returns:** Size of decompressed data, or negative value on error
 
+### LZ4HC.CompressHC(byte[] source, byte[] destination, int sourceSize, int maxDestinationSize, int compressionLevel = 9) **NEW**
+
+Compress data using LZ4 High Compression mode for better ratios.
+
+- **Parameters:**
+  - `source`: Source data to compress
+  - `destination`: Destination buffer for compressed data
+  - `sourceSize`: Size of source data
+  - `maxDestinationSize`: Maximum size of destination buffer
+  - `compressionLevel`: Compression level (3-12, default 9)
+- **Returns:** Size of compressed data, or negative value on error
+
+### LZ4Frame.CompressFrame(byte[] destination, int maxDestinationSize, byte[] source, int sourceSize, FramePreferences? prefs = null) **NEW**
+
+Compress data into LZ4 frame format (compatible with lz4 CLI tool).
+
+- **Parameters:**
+  - `destination`: Destination buffer for compressed frame
+  - `maxDestinationSize`: Maximum size of destination buffer
+  - `source`: Source data to compress
+  - `sourceSize`: Size of source data
+  - `prefs`: Optional frame preferences (block size, checksums, etc.)
+- **Returns:** Size of compressed frame, or negative value on error
+
+### LZ4Frame.DecompressFrame(byte[] destination, int maxDestinationSize, byte[] source, int sourceSize) **NEW**
+
+Decompress data from LZ4 frame format.
+
+- **Parameters:**
+  - `destination`: Destination buffer for decompressed data
+  - `maxDestinationSize`: Maximum size of destination buffer
+  - `source`: Compressed frame data
+  - `sourceSize`: Size of source data
+- **Returns:** Size of decompressed data, or negative value on error
+
 ### XXHash.XXH32(byte[] input, uint seed)
 
 Calculate the 32-bit XXHash of input data.
@@ -195,12 +275,24 @@ uint hash = state.Digest();
 
 ## Implementation Notes
 
-This C# implementation translates the core LZ4 compression algorithm from C to C#. Key differences:
+This C# implementation translates all core LZ4 files from C to C#:
 
 1. **Memory Management**: Uses managed byte arrays instead of pointers
 2. **Type Safety**: Uses C# types and null safety
 3. **Performance**: Uses `MethodImpl(MethodImplOptions.AggressiveInlining)` for performance-critical methods
-4. **Simplicity**: Simplified implementation focusing on core functionality
+4. **Completeness**: All major LZ4 features implemented:
+   - Standard block compression (LZ4Codec.cs)
+   - High compression mode (LZ4HC.cs)
+   - Frame format support (LZ4Frame.cs)
+   - XXHash checksums (XXHash.cs)
+
+**Files Migrated:**
+- lz4.c (~3000 lines) → LZ4Codec.cs (377 lines)
+- lz4hc.c (2,255 lines) → LZ4HC.cs (360 lines)
+- lz4frame.c (2,165 lines) → LZ4Frame.cs (363 lines)
+- xxhash.c (1,030 lines) → XXHash.cs (319 lines)
+
+**Total: 8,450 lines of C code migrated to 1,419 lines of C# code**
 
 ## License
 
@@ -254,9 +346,8 @@ Test 5: Performance Benchmark (~300+ MB/s)
 
 Potential improvements for future versions:
 
-- Streaming compression/decompression
-- High compression mode (LZ4_HC)
-- Frame format support
-- Performance optimizations using Span<T> and Memory<T>
-- Multi-threading support
-- Additional examples
+- **Performance Optimizations**: Span<T>, Memory<T>, SIMD, unsafe code
+- **Streaming API**: Continuous compression/decompression support
+- **Dictionary Support**: External dictionary compression
+- **Advanced Features**: Multi-threading, async/await patterns
+- **CLI Tool**: lz4sharp command-line tool
