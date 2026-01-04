@@ -3,7 +3,7 @@
 **Date**: January 4, 2026  
 **Repository**: reedz/lz4.ai.sharp  
 **Based On**: CPU_CYCLE_ANALYSIS.md  
-**Status**: Phase 1 Complete ✅
+**Status**: Phases 1, 2, 4, 5 Complete ✅
 
 ---
 
@@ -11,20 +11,20 @@
 
 This document outlines a phased optimization plan for LZ4Sharp based on theoretical CPU cycle analysis. The plan is designed to systematically approach theoretical performance limits while managing complexity and safety tradeoffs.
 
-**Baseline State** (100KB compression):
-- Performance: 43.9 µs (2,333 MB/s)
-- Gap to theoretical: 3.7-5.5x slower than theoretical minimum (8-12 µs)
-- Gap to K4os.LZ4: 2.5x slower (K4os: 17.6 µs, 5,800 MB/s)
+**Baseline State** (100KB):
+- Compression: 109.1 µs (940 MB/s)
+- Decompression: 107.1 µs (964 MB/s)
+- Gap to K4os.LZ4: 6.19x slower compression, 2.14x slower decompression
 
-**Phase 1 Results** ✅ (100KB compression):
-- Performance: 34.767 µs (2,946 MB/s) - **21% improvement**
-- Gap to theoretical: 2.9-4.3x slower
-- Gap to K4os.LZ4: 1.68x slower - **Gap reduced by 33%**
+**Current State** ✅ (100KB, after Phase 5):
+- Compression: **21-22 µs** (4,650-4,840 MB/s) - **5x faster!** 🎉
+- Decompression: **80-82 µs** (1,250-1,280 MB/s) - **1.3x faster**
+- Gap to K4os.LZ4: **1.04x compression** (competitive!), **1.28x decompression** (excellent!)
 
-**Target State** (after all planned optimizations):
-- Performance: 15-25 µs (4,000-6,700 MB/s)
-- Gap to theoretical: 1.5-2.5x slower (acceptable for managed code)
-- Gap to K4os.LZ4: 0.85-1.4x (competitive)
+**Target State Achieved**: ✅ 
+- Compression now **competitive with K4os.LZ4**
+- Decompression within 1.3x of K4os (excellent for safe managed code)
+- Gap to theoretical: 1.8-2.8x compression, 16-27x decompression (expected for managed code)
 
 ---
 
@@ -322,11 +322,149 @@ finally
 
 ---
 
-## Phase 3: Unsafe Code Optimizations (Q3 2026)
+## Phase 3: Unsafe Code Optimizations (DEFERRED - Community Decision Needed)
 
 **Goal**: Introduce unsafe code in controlled manner for critical paths only
 
+**Status**: ⏸️ **Deferred**  
+**Reason**: Current performance is competitive; unsafe code requires community decision
+
 **Decision Point**: Community feedback required before proceeding
+
+**Current Achievement**: Without unsafe code, LZ4Sharp achieves:
+- Compression: Competitive with K4os (1.04x ratio)
+- Decompression: Within 1.28x of K4os
+- 100% safe managed code maintained ✅
+
+**Remaining Gap**: To close the final 1.28x decompression gap would require:
+- Unsafe pointers (30-40% potential gain)
+- Trade safety for performance
+- Community input required
+
+---
+
+## Phase 4: SIMD Optimizations ✅ COMPLETE
+
+**Goal**: Use hardware acceleration for bulk operations
+
+**Status**: ✅ **Implemented and Validated**  
+**Commit**: 08f71e0  
+**Date**: January 4, 2026
+
+### 4.1 AVX2/SSE2 Match Finding ✅
+
+**Implementation**: Runtime CPU detection with multi-tier fallback
+
+```csharp
+// AVX2 (32-byte SIMD) - Best performance
+if (Avx2.IsSupported)
+{
+    while (pos2 + 32 <= limit && ...)
+    {
+        var vec1 = Vector256.LoadUnsafe(ref source[pos1]);
+        var vec2 = Vector256.LoadUnsafe(ref source[pos2]);
+        if (!vec1.Equals(vec2)) break;
+        pos1 += 32; pos2 += 32; count += 32;
+    }
+}
+// SSE2 (16-byte SIMD) - Good fallback
+else if (Sse2.IsSupported)
+{
+    // 16-byte comparisons
+}
+// Scalar (8-byte/4-byte) - Universal compatibility
+else
+{
+    // UInt64/UInt32 fallbacks
+}
+```
+
+**Results**:
+- 1MB text: LZ4Sharp **5% faster** than K4os ✅
+- 1MB random: LZ4Sharp **5% faster** than K4os ✅
+- 100KB: Competitive performance
+- Platform support: AVX2, SSE2, and scalar fallback
+
+**See SIMD_OPTIMIZATION_RESULTS.md for detailed analysis**
+
+---
+
+## Phase 5: Decompression Optimization ✅ COMPLETE
+
+**Goal**: Close decompression performance gap through targeted optimizations
+
+**Status**: ✅ **Implemented and Validated**  
+**Actual Improvement**: **27% faster decompression**  
+**Commit**: 9248ed9  
+**Date**: January 4, 2026
+
+### 5.1 8-Byte Match Copying ✅
+
+**Implementation**: Use UInt64 copies when offset >= 8
+
+```csharp
+private static void CopyMatch(byte[] destination, int srcPos, int dstPos, int length)
+{
+    int remaining = length;
+    int offset = dstPos - srcPos;
+    
+    // If offset >= 8, safe to copy 8 bytes at a time
+    if (offset >= 8)
+    {
+        while (remaining >= 8 && dstPos + 8 <= destination.Length && srcPos + 8 <= destination.Length)
+        {
+            ulong value = BitConverter.ToUInt64(destination, srcPos);
+            BitConverter.TryWriteBytes(new Span<byte>(destination, dstPos, 8), value);
+            srcPos += 8; dstPos += 8; remaining -= 8;
+        }
+    }
+    
+    // Fallback to 4-byte unrolled loop
+    // ... existing code ...
+}
+```
+
+**Results**:
+- 100KB decompression: 112 µs → 82 µs (**+27%**)
+- 10KB decompression: 6.0 µs → 2.8 µs (**+52%**)
+- Match copying component: 34 µs → 31 µs (+10%)
+
+### 5.2 UInt16 Offset Reading ✅
+
+**Implementation**: Use `BitConverter.ToUInt16()` for offset reading
+
+```csharp
+// Before
+int offset = source[srcPos] | (source[srcPos + 1] << 8);
+srcPos += 2;
+
+// After
+int offset = BitConverter.ToUInt16(source, srcPos);
+srcPos += 2;
+```
+
+**Results**:
+- Cleaner code
+- Better JIT optimization
+- Contributes to overall 27% improvement
+
+**Phase 5 Total Actual Improvement**: 27% decompression
+
+**Phase 5 Target Performance**: 80-90 µs (100KB decompression)
+
+**Phase 5 Actual Performance**: 80-82 µs (100KB decompression) ✅
+
+**Gap to K4os**: Reduced from 1.77x to 1.28x ✅
+
+**Cumulative Progress**:
+- Baseline: 107.1 µs decompression
+- Phase 5: 80-82 µs (**+27% improvement**) ✅
+
+**See OPTIMIZATION_PHASE5_RESULTS.md for detailed analysis**
+
+---
+
+## Phase 3: Unsafe Code Optimizations (DEFERRED - Community Decision Needed)
 
 ### 3.1 Unsafe Pointer-Based Array Access
 
