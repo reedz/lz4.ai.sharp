@@ -439,7 +439,7 @@ namespace LZ4Sharp
         private static bool AreEqual(byte[] source, int pos1, int pos2, int length)
         {
             // Optimized: Use 32-bit comparison for MINMATCH (4 bytes) which is the most common case
-            if (length == 4 && pos1 + 4 <= source.Length && pos2 + 4 <= source.Length)
+            if (length == 4 && pos1 <= source.Length - 4 && pos2 <= source.Length - 4)
             {
                 uint val1 = BitConverter.ToUInt32(source, pos1);
                 uint val2 = BitConverter.ToUInt32(source, pos2);
@@ -461,7 +461,7 @@ namespace LZ4Sharp
             int count = 0;
             
             // Optimized: Compare 4 bytes at a time when possible
-            while (pos2 + 4 <= limit && pos1 + 4 <= source.Length)
+            while (pos2 + 4 <= limit && pos1 <= source.Length - 4)
             {
                 uint val1 = BitConverter.ToUInt32(source, pos1);
                 uint val2 = BitConverter.ToUInt32(source, pos2);
