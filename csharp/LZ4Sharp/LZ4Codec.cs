@@ -473,7 +473,7 @@ namespace LZ4Sharp
             }
             
             // Handle remaining bytes
-            while (pos2 < limit && source[pos1] == source[pos2])
+            while (pos2 < limit && pos1 < source.Length && source[pos1] == source[pos2])
             {
                 pos1++;
                 pos2++;
