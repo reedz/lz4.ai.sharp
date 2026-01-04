@@ -240,6 +240,7 @@ namespace LZ4Sharp.Benchmarks
 
         private static bool AreEqual(byte[] source, int pos1, int pos2, int length)
         {
+            // Simplified helper for benchmark testing - not using optimized version from LZ4Codec
             for (int i = 0; i < length; i++)
             {
                 if (source[pos1 + i] != source[pos2 + i])

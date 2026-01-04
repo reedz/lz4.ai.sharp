@@ -463,7 +463,7 @@ namespace LZ4Sharp
             
             // Optimized: Compare 4 bytes at a time when possible
             // Note: Uses BitConverter which is endian-dependent but works correctly on little-endian systems (x86/x64)
-            while (pos2 + 4 <= limit && pos1 <= source.Length - 4)
+            while (pos2 + 4 <= limit && pos1 <= source.Length - 4 && pos2 <= source.Length - 4)
             {
                 uint val1 = BitConverter.ToUInt32(source, pos1);
                 uint val2 = BitConverter.ToUInt32(source, pos2);
