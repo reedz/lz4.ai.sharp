@@ -142,9 +142,9 @@ This document analyzes the theoretical minimum CPU cycles required for the LZ4 c
 - Compression: 175,600 / 100,000 = **1.76 cycles/byte**
 - Decompression: 437,200 / 100,000 = **4.37 cycles/byte**
 
-Wait, this seems too efficient. Let me recalculate considering overhead...
+This initial calculation requires adjustment to account for .NET runtime overhead and real-world constraints.
 
-**Corrected Analysis** (accounting for .NET overhead):
+**Adjusted Analysis** (accounting for .NET overhead):
 
 The issue is that we're not in a perfect CPU world. In .NET managed code:
 - Bounds checking: +20-30% overhead
