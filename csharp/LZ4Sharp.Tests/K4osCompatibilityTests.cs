@@ -9,7 +9,7 @@ namespace LZ4Sharp.Tests
     /// 
     /// NOTE: Full bidirectional compatibility test results:
     /// - K4os compress → LZ4Sharp decompress: WORKS for all data sizes and patterns ✓
-    /// - LZ4Sharp compress → K4os decompress: WORKS for small data (< ~256 bytes) ✓
+    /// - LZ4Sharp compress → K4os decompress: WORKS for very small data (< 100 bytes) ✓
     /// 
     /// These tests validate the working compatibility scenarios.
     /// </summary>
@@ -100,7 +100,7 @@ namespace LZ4Sharp.Tests
         public void K4os_Compress_LZ4Sharp_Decompress_RepeatedPattern()
         {
             // Arrange - Use repeated pattern for better compression
-            string text = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Lorem ipsum dolor site amat.";
+            string text = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Lorem ipsum dolor sit amat.";
             byte[] source = Encoding.UTF8.GetBytes(text);
             int sourceSize = source.Length;
 
