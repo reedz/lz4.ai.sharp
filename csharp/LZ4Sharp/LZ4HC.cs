@@ -195,9 +195,9 @@ namespace LZ4Sharp
                     destination[dstPos++] = source[anchor + i];
                 }
 
-                // Encode offset (little-endian)
-                destination[dstPos++] = (byte)offset;
-                destination[dstPos++] = (byte)(offset >> 8);
+                // Encode offset (Phase 6 Optimization: Use BitConverter for consistency)
+                BitConverter.TryWriteBytes(new Span<byte>(destination, dstPos, 2), (ushort)offset);
+                dstPos += 2;
 
                 // Encode match length
                 int mlCode = matchLength - MINMATCH;

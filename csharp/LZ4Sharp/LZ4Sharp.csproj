@@ -9,6 +9,9 @@
     <TieredCompilation>true</TieredCompilation>
     <TieredCompilationQuickJit>false</TieredCompilationQuickJit>
     <TieredCompilationQuickJitForLoops>false</TieredCompilationQuickJitForLoops>
+    
+    <!-- Phase 6 Optimization: Enable Dynamic PGO for additional runtime optimizations -->
+    <TieredPGO>true</TieredPGO>
   </PropertyGroup>
 
 </Project>

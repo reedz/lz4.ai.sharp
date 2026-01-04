@@ -263,10 +263,10 @@ namespace LZ4Sharp
                 WildCopy(source, destination, anchor, dstPos, litLength);
                 dstPos += litLength;
 
-                // Encode offset
+                // Encode offset (Phase 6 Optimization: Use BitConverter for consistency)
                 int offset = forwardPos - matchPos;
-                destination[dstPos++] = (byte)offset;
-                destination[dstPos++] = (byte)(offset >> 8);
+                BitConverter.TryWriteBytes(new Span<byte>(destination, dstPos, 2), (ushort)offset);
+                dstPos += 2;
 
                 // Find match length
                 int matchLength = MINMATCH + CountMatch(source, matchPos + MINMATCH, forwardPos + MINMATCH, srcSize);
@@ -736,9 +736,10 @@ namespace LZ4Sharp
                     source.Slice(anchor, litLength).CopyTo(destination.Slice(dstPos));
                     dstPos += litLength;
 
+                    // Phase 6 Optimization: Use BitConverter for consistency
                     int offset = forwardPos - matchPos;
-                    destination[dstPos++] = (byte)offset;
-                    destination[dstPos++] = (byte)(offset >> 8);
+                    BitConverter.TryWriteBytes(destination.Slice(dstPos, 2), (ushort)offset);
+                    dstPos += 2;
 
                     int matchLength = MINMATCH + CountMatchSpan(source, matchPos + MINMATCH, forwardPos + MINMATCH, srcSize);
 
