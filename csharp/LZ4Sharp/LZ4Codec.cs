@@ -31,6 +31,9 @@
 
 using System;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.X86;
 
 namespace LZ4Sharp
 {
@@ -484,6 +487,21 @@ namespace LZ4Sharp
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool AreEqual(byte[] source, int pos1, int pos2, int length)
         {
+            // Phase 4 SIMD Optimization: Use SIMD for longer comparisons
+            if (length == 32 && Avx2.IsSupported && pos1 + 32 <= source.Length && pos2 + 32 <= source.Length)
+            {
+                var vec1 = Vector256.LoadUnsafe(ref source[pos1]);
+                var vec2 = Vector256.LoadUnsafe(ref source[pos2]);
+                return vec1.Equals(vec2);
+            }
+            
+            if (length == 16 && Sse2.IsSupported && pos1 + 16 <= source.Length && pos2 + 16 <= source.Length)
+            {
+                var vec1 = Vector128.LoadUnsafe(ref source[pos1]);
+                var vec2 = Vector128.LoadUnsafe(ref source[pos2]);
+                return vec1.Equals(vec2);
+            }
+            
             // Phase 1 Optimization: Add 64-bit comparison for 8-byte matches
             // This provides 8-12% speedup for compression by reducing loop iterations
             if (length == 8 && pos1 <= source.Length - 8 && pos2 <= source.Length - 8)
@@ -515,6 +533,39 @@ namespace LZ4Sharp
         private static int CountMatch(byte[] source, int pos1, int pos2, int limit)
         {
             int count = 0;
+            
+            // Phase 4 SIMD Optimization: Use AVX2 for 32-byte comparisons when available
+            if (Avx2.IsSupported)
+            {
+                while (pos2 + 32 <= limit && pos1 + 32 <= source.Length && pos2 + 32 <= source.Length)
+                {
+                    var vec1 = Vector256.LoadUnsafe(ref source[pos1]);
+                    var vec2 = Vector256.LoadUnsafe(ref source[pos2]);
+                    
+                    if (!vec1.Equals(vec2))
+                        break;
+                    
+                    pos1 += 32;
+                    pos2 += 32;
+                    count += 32;
+                }
+            }
+            // Fallback to SSE2 for 16-byte comparisons
+            else if (Sse2.IsSupported)
+            {
+                while (pos2 + 16 <= limit && pos1 + 16 <= source.Length && pos2 + 16 <= source.Length)
+                {
+                    var vec1 = Vector128.LoadUnsafe(ref source[pos1]);
+                    var vec2 = Vector128.LoadUnsafe(ref source[pos2]);
+                    
+                    if (!vec1.Equals(vec2))
+                        break;
+                    
+                    pos1 += 16;
+                    pos2 += 16;
+                    count += 16;
+                }
+            }
             
             // Phase 1 Optimization: Compare 8 bytes at a time when possible (UInt64)
             // This provides 3-5% additional speedup, especially for long matches
@@ -823,6 +874,21 @@ namespace LZ4Sharp
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool AreEqualSpan(ReadOnlySpan<byte> source, int pos1, int pos2, int length)
         {
+            // Phase 4 SIMD Optimization: Use SIMD for longer comparisons
+            if (length == 32 && Avx2.IsSupported && pos1 + 32 <= source.Length && pos2 + 32 <= source.Length)
+            {
+                var vec1 = Vector256.LoadUnsafe(ref MemoryMarshal.GetReference(source.Slice(pos1)));
+                var vec2 = Vector256.LoadUnsafe(ref MemoryMarshal.GetReference(source.Slice(pos2)));
+                return vec1.Equals(vec2);
+            }
+            
+            if (length == 16 && Sse2.IsSupported && pos1 + 16 <= source.Length && pos2 + 16 <= source.Length)
+            {
+                var vec1 = Vector128.LoadUnsafe(ref MemoryMarshal.GetReference(source.Slice(pos1)));
+                var vec2 = Vector128.LoadUnsafe(ref MemoryMarshal.GetReference(source.Slice(pos2)));
+                return vec1.Equals(vec2);
+            }
+            
             if (length == 8 && pos1 <= source.Length - 8 && pos2 <= source.Length - 8)
             {
                 ulong val1 = System.BitConverter.ToUInt64(source.Slice(pos1, 8));
@@ -851,6 +917,39 @@ namespace LZ4Sharp
         private static int CountMatchSpan(ReadOnlySpan<byte> source, int pos1, int pos2, int limit)
         {
             int count = 0;
+            
+            // Phase 4 SIMD Optimization: Use AVX2 for 32-byte comparisons when available
+            if (Avx2.IsSupported)
+            {
+                while (pos2 + 32 <= limit && pos1 + 32 <= source.Length && pos2 + 32 <= source.Length)
+                {
+                    var vec1 = Vector256.LoadUnsafe(ref MemoryMarshal.GetReference(source.Slice(pos1)));
+                    var vec2 = Vector256.LoadUnsafe(ref MemoryMarshal.GetReference(source.Slice(pos2)));
+                    
+                    if (!vec1.Equals(vec2))
+                        break;
+                    
+                    pos1 += 32;
+                    pos2 += 32;
+                    count += 32;
+                }
+            }
+            // Fallback to SSE2 for 16-byte comparisons
+            else if (Sse2.IsSupported)
+            {
+                while (pos2 + 16 <= limit && pos1 + 16 <= source.Length && pos2 + 16 <= source.Length)
+                {
+                    var vec1 = Vector128.LoadUnsafe(ref MemoryMarshal.GetReference(source.Slice(pos1)));
+                    var vec2 = Vector128.LoadUnsafe(ref MemoryMarshal.GetReference(source.Slice(pos2)));
+                    
+                    if (!vec1.Equals(vec2))
+                        break;
+                    
+                    pos1 += 16;
+                    pos2 += 16;
+                    count += 16;
+                }
+            }
             
             while (pos2 + 8 <= limit && pos1 <= source.Length - 8 && pos2 <= source.Length - 8)
             {
