@@ -438,6 +438,16 @@ namespace LZ4Sharp
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool AreEqual(byte[] source, int pos1, int pos2, int length)
         {
+            // Optimized: Use 32-bit comparison for MINMATCH (4 bytes) which is the most common case
+            // Note: Uses BitConverter which is endian-dependent but works correctly on little-endian systems (x86/x64)
+            if (length == 4 && pos1 <= source.Length - 4 && pos2 <= source.Length - 4)
+            {
+                uint val1 = BitConverter.ToUInt32(source, pos1);
+                uint val2 = BitConverter.ToUInt32(source, pos2);
+                return val1 == val2;
+            }
+            
+            // Fallback to byte-by-byte comparison for other lengths
             for (int i = 0; i < length; i++)
             {
                 if (source[pos1 + i] != source[pos2 + i])
@@ -450,7 +460,22 @@ namespace LZ4Sharp
         private static int CountMatch(byte[] source, int pos1, int pos2, int limit)
         {
             int count = 0;
-            while (pos2 < limit && source[pos1] == source[pos2])
+            
+            // Optimized: Compare 4 bytes at a time when possible
+            // Note: Uses BitConverter which is endian-dependent but works correctly on little-endian systems (x86/x64)
+            while (pos2 + 4 <= limit && pos1 <= source.Length - 4 && pos2 <= source.Length - 4)
+            {
+                uint val1 = BitConverter.ToUInt32(source, pos1);
+                uint val2 = BitConverter.ToUInt32(source, pos2);
+                if (val1 != val2)
+                    break;
+                pos1 += 4;
+                pos2 += 4;
+                count += 4;
+            }
+            
+            // Handle remaining bytes
+            while (pos2 < limit && pos1 < source.Length && source[pos1] == source[pos2])
             {
                 pos1++;
                 pos2++;
