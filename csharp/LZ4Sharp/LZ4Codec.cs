@@ -364,11 +364,11 @@ namespace LZ4Sharp
                 if (srcPos >= srcSize)
                     break; // End of input
 
-                // Read offset
+                // Read offset (use UInt16 for efficiency)
                 if (srcPos + 2 > srcSize)
                     return -1;
 
-                int offset = source[srcPos] | (source[srcPos + 1] << 8);
+                int offset = BitConverter.ToUInt16(source, srcPos);
                 srcPos += 2;
 
                 if (offset == 0 || offset > dstPos)
@@ -437,11 +437,11 @@ namespace LZ4Sharp
                 if (srcPos >= srcSize)
                     break; // End of input
 
-                // Read offset
+                // Read offset (use UInt16 for efficiency)
                 if (srcPos + 2 > srcSize)
                     return -1;
 
-                int offset = source[srcPos] | (source[srcPos + 1] << 8);
+                int offset = BitConverter.ToUInt16(source, srcPos);
                 srcPos += 2;
 
                 if (offset == 0 || offset > (dstPos - dstOffset))
@@ -613,9 +613,23 @@ namespace LZ4Sharp
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void CopyMatch(byte[] destination, int srcPos, int dstPos, int length)
         {
-            // Optimized overlapping copy with unrolled loop (25% faster based on micro-benchmarks)
+            // Optimized overlapping copy with unrolled loop
             // This handles the case where source and destination overlap
             int remaining = length;
+            int offset = dstPos - srcPos;
+            
+            // If offset >= 8, we can safely copy 8 bytes at a time without overlap issues
+            if (offset >= 8)
+            {
+                while (remaining >= 8 && dstPos + 8 <= destination.Length && srcPos + 8 <= destination.Length)
+                {
+                    ulong value = BitConverter.ToUInt64(destination, srcPos);
+                    BitConverter.TryWriteBytes(new Span<byte>(destination, dstPos, 8), value);
+                    srcPos += 8;
+                    dstPos += 8;
+                    remaining -= 8;
+                }
+            }
             
             // Unroll by 4 bytes when possible
             while (remaining >= 4)
@@ -832,7 +846,7 @@ namespace LZ4Sharp
                 if (srcPos + 2 > srcSize)
                     return -1;
 
-                int offset = source[srcPos] | (source[srcPos + 1] << 8);
+                int offset = BitConverter.ToUInt16(source.Slice(srcPos, 2));
                 srcPos += 2;
 
                 if (offset == 0 || offset > dstPos)
@@ -986,6 +1000,20 @@ namespace LZ4Sharp
         private static void CopyMatchSpan(Span<byte> destination, int srcPos, int dstPos, int length)
         {
             int remaining = length;
+            int offset = dstPos - srcPos;
+            
+            // If offset >= 8, we can safely copy 8 bytes at a time without overlap issues
+            if (offset >= 8)
+            {
+                while (remaining >= 8 && dstPos + 8 <= destination.Length && srcPos + 8 <= destination.Length)
+                {
+                    ulong value = BitConverter.ToUInt64(destination.Slice(srcPos, 8));
+                    BitConverter.TryWriteBytes(destination.Slice(dstPos, 8), value);
+                    srcPos += 8;
+                    dstPos += 8;
+                    remaining -= 8;
+                }
+            }
             
             while (remaining >= 4)
             {
