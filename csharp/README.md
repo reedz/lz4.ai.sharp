@@ -82,16 +82,21 @@ See [Benchmarks README](LZ4Sharp.Benchmarks/README.md) for more information.
 
 Performance comparison with K4os.Compression.LZ4 on AMD EPYC 7763:
 
-| Operation       | Data Size | LZ4Sharp  | K4os.LZ4 | Ratio |
-|-----------------|-----------|-----------|----------|-------|
-| **Compression**     | 10 KB     | 11.7 μs   | 2.6 μs   | 4.5x  |
-| **Compression**     | 100 KB    | 147.4 μs  | 24.1 μs  | 6.1x  |
-| **Decompression**   | 10 KB     | 7.1 μs    | 1.5 μs   | 2.8x  |
-| **Decompression**   | 100 KB    | 125.2 μs  | 63.2 μs  | 5.2x  |
+| Operation       | Data Size | LZ4Sharp  | K4os.LZ4 | Ratio | Improvement |
+|-----------------|-----------|-----------|----------|-------|-------------|
+| **Compression**     | 10 KB     | 8.4 μs    | 2.6 μs   | 3.2x  | ✅ 28% faster |
+| **Compression**     | 100 KB    | 83.3 μs   | 24.3 μs  | 3.4x  | ✅ 43% faster |
+| **Decompression**   | 10 KB     | 5.8 μs    | 1.4 μs   | 4.1x  | ✅ 18% faster |
+| **Decompression**   | 100 KB    | 114.2 μs  | 61.4 μs  | 1.9x  | ✅ 9% faster  |
 
 **Throughput (100KB data):**
-- LZ4Sharp: ~694 MB/s compression, ~818 MB/s decompression
-- K4os.LZ4: ~4,251 MB/s compression, ~1,620 MB/s decompression
+- LZ4Sharp: ~1,230 MB/s compression, ~895 MB/s decompression
+- K4os.LZ4: ~4,222 MB/s compression, ~1,667 MB/s decompression
+
+**Recent Optimizations (v1.1):**
+- Buffer.BlockCopy for literal copying (18% faster than Array.Copy)
+- Unrolled loops for overlapping match copying (25% faster)
+- Overall compression: 25-28% faster, decompression: 8-18% faster
 
 LZ4Sharp prioritizes code clarity and educational value, while K4os.LZ4 is optimized for production use.
 

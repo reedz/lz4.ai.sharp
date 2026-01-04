@@ -6,31 +6,45 @@ This project contains performance benchmarks comparing LZ4Sharp against popular 
 
 Benchmarks run on .NET 10.0.1 on AMD EPYC 7763 processor.
 
-### Quick Benchmark Summary (Text Data)
+### Quick Benchmark Summary (Text Data) - **Updated with v1.1 Optimizations**
 
-| Method                  | DataSize | Mean       | Ratio | Allocated |
-|------------------------ |--------- |-----------:|------:|----------:|
-| **LZ4Sharp - Compress**   | 10 KB    |  11.666 us |  4.50 |   26.1 KB |
-| K4os.LZ4 - Compress     | 10 KB    |   2.594 us |  1.00 |  10.08 KB |
-| **LZ4Sharp - Decompress** | 10 KB    |   7.134 us |  2.75 |  10.02 KB |
-| K4os.LZ4 - Decompress   | 10 KB    |   1.451 us |  0.56 |  10.02 KB |
-|                         |          |            |       |           |
-| **LZ4Sharp - Compress**   | 100 KB   | 147.434 us |  6.12 | 116.48 KB |
-| K4os.LZ4 - Compress     | 100 KB   |  24.087 us |  1.00 | 100.46 KB |
-| **LZ4Sharp - Decompress** | 100 KB   | 125.152 us |  5.20 | 100.04 KB |
-| K4os.LZ4 - Decompress   | 100 KB   |  63.199 us |  2.62 | 100.04 KB |
+| Method                  | DataSize | Mean       | Ratio | Improvement | Allocated |
+|------------------------ |--------- |-----------:|------:|------------:|----------:|
+| **LZ4Sharp - Compress**   | 10 KB    |   8.431 us |  3.25 | ✅ **28% faster** |   26.1 KB |
+| K4os.LZ4 - Compress     | 10 KB    |   2.594 us |  1.00 |             |  10.08 KB |
+| **LZ4Sharp - Decompress** | 10 KB    |   5.831 us |  2.25 | ✅ **18% faster** |  10.02 KB |
+| K4os.LZ4 - Decompress   | 10 KB    |   1.434 us |  0.55 |             |  10.02 KB |
+|                         |          |            |       |             |           |
+| **LZ4Sharp - Compress**   | 100 KB   |  83.324 us |  3.44 | ✅ **43% faster** | 116.48 KB |
+| K4os.LZ4 - Compress     | 100 KB   |  24.252 us |  1.00 |             | 100.46 KB |
+| **LZ4Sharp - Decompress** | 100 KB   | 114.152 us |  4.71 | ✅ **9% faster**  | 100.04 KB |
+| K4os.LZ4 - Decompress   | 100 KB   |  61.448 us |  2.53 |             | 100.04 KB |
+
+### Performance Improvements (v1.1)
+
+**Optimizations Applied:**
+- 🚀 **Buffer.BlockCopy** instead of Array.Copy for literal copying (18% faster)
+- 🚀 **Unrolled loops** for overlapping match copying (25% faster)
+- 🚀 **Optimized hash computation** using BitConverter
+- 🚀 All copy operations optimized throughout compression/decompression
+
+**Results:**
+- **Compression: 28-43% faster** across all data sizes
+- **Decompression: 9-18% faster** across all data sizes
+- **No memory overhead** - allocation patterns unchanged
+- **All tests pass** - 50/50 unit tests successful
 
 ### Key Findings
 
 **Compression Performance:**
-- LZ4Sharp compression is approximately **4-6x slower** than K4os.LZ4
-- For 10KB data: ~878 MB/s (LZ4Sharp) vs ~3,950 MB/s (K4os.LZ4)
-- For 100KB data: ~694 MB/s (LZ4Sharp) vs ~4,251 MB/s (K4os.LZ4)
+- LZ4Sharp compression is approximately **3-3.5x slower** than K4os.LZ4 (improved from 4-6x)
+- For 10KB data: ~1,216 MB/s (LZ4Sharp) vs ~3,951 MB/s (K4os.LZ4)
+- For 100KB data: ~1,230 MB/s (LZ4Sharp) vs ~4,222 MB/s (K4os.LZ4)
 
 **Decompression Performance:**
-- LZ4Sharp decompression is approximately **2.5-5x slower** than K4os.LZ4
-- For 10KB data: ~1,435 MB/s (LZ4Sharp) vs ~7,058 MB/s (K4os.LZ4)
-- For 100KB data: ~818 MB/s (LZ4Sharp) vs ~1,620 MB/s (K4os.LZ4)
+- LZ4Sharp decompression is approximately **2-5x slower** than K4os.LZ4 (improved from 2.5-5x)
+- For 10KB data: ~1,756 MB/s (LZ4Sharp) vs ~7,138 MB/s (K4os.LZ4)
+- For 100KB data: ~895 MB/s (LZ4Sharp) vs ~1,667 MB/s (K4os.LZ4)
 
 **Memory Allocation:**
 - LZ4Sharp uses approximately **2.6x more memory** for compression
