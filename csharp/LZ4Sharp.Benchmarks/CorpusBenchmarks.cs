@@ -17,6 +17,9 @@ namespace LZ4Sharp.Benchmarks
     [Config(typeof(Config))]
     public class CorpusBenchmarks
     {
+        // Fixed base date for deterministic timestamp generation
+        private static readonly DateTime BaseDate = new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
         private class Config : ManualConfig
         {
             public Config()
@@ -512,7 +515,7 @@ namespace LZ4Sharp.Benchmarks
                         title = $"Post {j} by User {i}",
                         content = "Lorem ipsum dolor sit amet, consectetur adipiscing elit.",
                         tags = new[] { "technology", "programming", "compression" },
-                        timestamp = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddDays(-i).ToString("o")
+                        timestamp = BaseDate.AddDays(-i).ToString("o")
                     }).ToArray()
                 }));
             }
@@ -526,19 +529,18 @@ namespace LZ4Sharp.Benchmarks
         /// </summary>
         private static byte[] GenerateJsonArrayData()
         {
-            var baseDate = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc);
             var data = new
             {
                 metadata = new
                 {
                     version = "1.0",
-                    generated = baseDate.ToString("o"),
+                    generated = BaseDate.ToString("o"),
                     recordCount = 2000
                 },
                 records = Enumerable.Range(0, 2000).Select(i => new
                 {
                     id = i,
-                    timestamp = baseDate.AddSeconds(-i).ToString("o"),
+                    timestamp = BaseDate.AddSeconds(-i).ToString("o"),
                     value = 100.0 + (i % 100),
                     status = new[] { "active", "inactive", "pending" }[i % 3],
                     metadata = new Dictionary<string, object>
