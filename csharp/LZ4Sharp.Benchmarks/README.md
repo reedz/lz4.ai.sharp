@@ -2,6 +2,13 @@
 
 This project contains performance benchmarks comparing LZ4Sharp against popular LZ4 C# NuGet packages.
 
+## Available Benchmarks
+
+1. **Quick Benchmarks** - Fast sanity checks with common data patterns
+2. **Comprehensive Benchmarks** - Full test suite with multiple sizes and patterns  
+3. **Standard Corpus Benchmarks** - Industry-standard compression test suites (Calgary, Canterbury, JSON)
+4. **Log Compression Profiling** - Real-world log data patterns
+
 ## Benchmark Results
 
 Benchmarks run on .NET 10.0.1 on AMD EPYC 7763 processor.
@@ -84,7 +91,20 @@ cd LZ4Sharp.Benchmarks
 dotnet run -c Release -- --filter "*LZ4CompressionBenchmarks*"
 ```
 
-### Log Compression Profiling (New!)
+### Standard Corpus Benchmarks (New!)
+```bash
+cd LZ4Sharp.Benchmarks
+dotnet run -c Release -- --filter "*CorpusBenchmarks*" --job dry
+```
+
+This benchmark tests with standard compression corpora:
+- **Calgary Corpus**: Industry-standard compression benchmark (bib, book1, paper1, progc, progl)
+- **Canterbury Corpus**: Modern compression test suite (alice29.txt, asyoulik.txt, lcet10.txt, plrabn12.txt)
+- **JSON Bench**: JSON data patterns for modern applications
+
+See [CORPUS_BENCHMARKS.md](CORPUS_BENCHMARKS.md) for detailed information about the corpus benchmarks.
+
+### Log Compression Profiling
 ```bash
 cd LZ4Sharp.Benchmarks
 dotnet run -c Release -- --filter "*LogCompressionProfilingBenchmarks*" --job short
@@ -114,6 +134,12 @@ dotnet run -c Release -- --filter "*Compress*" --job short
 ### LZ4CompressionBenchmarks
 - Data sizes: 1KB, 10KB, 100KB, 1MB
 - Data patterns: Text, Random, Repetitive
+- Standard BenchmarkDotNet configuration
+
+### CorpusBenchmarks
+- Files from Calgary Corpus: bib, book1, paper1, progc, progl
+- Files from Canterbury Corpus: alice29.txt, asyoulik.txt, lcet10.txt, plrabn12.txt
+- JSON patterns: simple, complex, array
 - Standard BenchmarkDotNet configuration
 
 ## Interpreting Results
