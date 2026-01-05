@@ -260,9 +260,8 @@ namespace LZ4Sharp
                         token = RUN_MASK << ML_BITS;
                         destination[tokenPos] = (byte)token;
                         int len = litLength - RUN_MASK;
-                        for (; len >= 255; len -= 255)
-                            destination[dstPos++] = 255;
-                        destination[dstPos++] = (byte)len;
+                        // Phase 2 Optimization: Use optimized variable-length encoding
+                        dstPos = EncodeVariableLength(destination, dstPos, len);
                     }
                     else
                     {
@@ -287,9 +286,8 @@ namespace LZ4Sharp
                     {
                         destination[tokenPos] |= (byte)ML_MASK;
                         int len = matchLength - (ML_MASK + MINMATCH);
-                        for (; len >= 255; len -= 255)
-                            destination[dstPos++] = 255;
-                        destination[dstPos++] = (byte)len;
+                        // Phase 2 Optimization: Use optimized variable-length encoding
+                        dstPos = EncodeVariableLength(destination, dstPos, len);
                     }
                     else
                     {
@@ -320,9 +318,8 @@ namespace LZ4Sharp
                 {
                     destination[dstPos++] = (byte)(RUN_MASK << ML_BITS);
                     int len = lastLiterals - RUN_MASK;
-                    for (; len >= 255; len -= 255)
-                        destination[dstPos++] = 255;
-                    destination[dstPos++] = (byte)len;
+                    // Phase 2 Optimization: Use optimized variable-length encoding
+                    dstPos = EncodeVariableLength(destination, dstPos, len);
                 }
                 else
                 {
@@ -418,9 +415,8 @@ namespace LZ4Sharp
                         token = RUN_MASK << ML_BITS;
                         destination[tokenPos] = (byte)token;
                         int len = litLength - RUN_MASK;
-                        for (; len >= 255; len -= 255)
-                            destination[dstPos++] = 255;
-                        destination[dstPos++] = (byte)len;
+                        // Phase 2 Optimization: Use optimized variable-length encoding
+                        dstPos = EncodeVariableLength(destination, dstPos, len);
                     }
                     else
                     {
@@ -441,9 +437,8 @@ namespace LZ4Sharp
                     {
                         destination[tokenPos] |= (byte)ML_MASK;
                         int len = matchLength - (ML_MASK + MINMATCH);
-                        for (; len >= 255; len -= 255)
-                            destination[dstPos++] = 255;
-                        destination[dstPos++] = (byte)len;
+                        // Phase 2 Optimization: Use optimized variable-length encoding
+                        dstPos = EncodeVariableLength(destination, dstPos, len);
                     }
                     else
                     {
@@ -463,9 +458,8 @@ namespace LZ4Sharp
                 {
                     destination[dstPos++] = (byte)(RUN_MASK << ML_BITS);
                     int len = lastLiterals - RUN_MASK;
-                    for (; len >= 255; len -= 255)
-                        destination[dstPos++] = 255;
-                    destination[dstPos++] = (byte)len;
+                    // Phase 2 Optimization: Use optimized variable-length encoding
+                    dstPos = EncodeVariableLength(destination, dstPos, len);
                 }
                 else
                 {
@@ -766,10 +760,58 @@ namespace LZ4Sharp
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void CopyMatch(byte[] destination, int srcPos, int dstPos, int length)
         {
-            // Optimized overlapping copy with unrolled loop
+            // Phase 2 Optimization: SIMD-enhanced overlapping copy
             // This handles the case where source and destination overlap
             int remaining = length;
             int offset = dstPos - srcPos;
+            
+            // Phase 2: For short overlaps (offset < 16), use pattern replication
+            // This is faster than byte-by-byte copy for small repeating patterns
+            if (offset < 16 && offset > 0)
+            {
+                // Replicate the pattern to fill the destination
+                // This is especially efficient for RLE-like patterns common in logs
+                while (remaining >= offset)
+                {
+                    for (int i = 0; i < offset; i++)
+                    {
+                        destination[dstPos + i] = destination[srcPos + i];
+                    }
+                    dstPos += offset;
+                    remaining -= offset;
+                }
+                // Handle any remaining bytes
+                for (int i = 0; i < remaining; i++)
+                {
+                    destination[dstPos + i] = destination[srcPos + i];
+                }
+                return;
+            }
+            
+            // Phase 2: Use AVX2 for non-overlapping long copies (offset >= 32)
+            if (Avx2.IsSupported && offset >= 32 && remaining >= 32)
+            {
+                while (remaining >= 32 && dstPos + 32 <= destination.Length && srcPos + 32 <= destination.Length)
+                {
+                    var vec = Vector256.LoadUnsafe(ref destination[srcPos]);
+                    vec.StoreUnsafe(ref destination[dstPos]);
+                    srcPos += 32;
+                    dstPos += 32;
+                    remaining -= 32;
+                }
+            }
+            // Fallback to SSE2 for 16-byte copies
+            else if (Sse2.IsSupported && offset >= 16 && remaining >= 16)
+            {
+                while (remaining >= 16 && dstPos + 16 <= destination.Length && srcPos + 16 <= destination.Length)
+                {
+                    var vec = Vector128.LoadUnsafe(ref destination[srcPos]);
+                    vec.StoreUnsafe(ref destination[dstPos]);
+                    srcPos += 16;
+                    dstPos += 16;
+                    remaining -= 16;
+                }
+            }
             
             // If offset >= 8, we can safely copy 8 bytes at a time without overlap issues
             if (offset >= 8)
@@ -802,6 +844,40 @@ namespace LZ4Sharp
                 destination[dstPos++] = destination[srcPos++];
                 remaining--;
             }
+        }
+
+        /// <summary>
+        /// Phase 2 Optimization: Optimized variable-length encoding
+        /// Unrolls common cases to avoid loop overhead for typical length values
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static int EncodeVariableLength(byte[] destination, int dstPos, int len)
+        {
+            // Phase 2: Unroll common cases for better performance
+            // Most lengths are < 510, so handle these specially
+            if (len < 255)
+            {
+                destination[dstPos++] = (byte)len;
+            }
+            else if (len < 510)
+            {
+                destination[dstPos++] = 255;
+                destination[dstPos++] = (byte)(len - 255);
+            }
+            else if (len < 765)
+            {
+                destination[dstPos++] = 255;
+                destination[dstPos++] = 255;
+                destination[dstPos++] = (byte)(len - 510);
+            }
+            else
+            {
+                // Fallback to loop for very long lengths (rare)
+                for (; len >= 255; len -= 255)
+                    destination[dstPos++] = 255;
+                destination[dstPos++] = (byte)len;
+            }
+            return dstPos;
         }
 
         #region Phase 2: Span-based APIs and ArrayPool
