@@ -258,12 +258,16 @@ namespace LZ4Sharp
             // Note: Fast path for small inputs disabled for now to ensure correctness
             // Can be re-enabled after more thorough testing
 
+            // Determine hash table size based on options
+            int hashLog = options.UseAdaptiveHashSizing ? GetAdaptiveHashLog(srcSize) : HASH_LOG;
+            int hashSize = 1 << hashLog;
+
             // Phase 1 Optimization: Use ArrayPool for hash table to reduce GC pressure
-            // This eliminates per-call allocation of 16KB hash table
-            int[] hashTable = System.Buffers.ArrayPool<int>.Shared.Rent(HASH_SIZE);
+            // With adaptive sizing, this can significantly reduce memory footprint and improve cache hit rate
+            int[] hashTable = System.Buffers.ArrayPool<int>.Shared.Rent(hashSize);
             try
             {
-                hashTable.AsSpan(0, HASH_SIZE).Fill(-1);
+                hashTable.AsSpan(0, hashSize).Fill(-1);
 
                 srcPos++;
 
@@ -307,7 +311,9 @@ namespace LZ4Sharp
                             if (forwardPos + 4 > srcSize)
                                 break;
                                 
-                            int hash = HashPosition(source, forwardPos);
+                            int hash = options.UseAdaptiveHashSizing 
+                                ? HashPositionAdaptive(source, forwardPos, hashLog)
+                                : HashPosition(source, forwardPos);
                             int candidate = hashTable[hash];
                             hashTable[hash] = forwardPos;
 
@@ -389,7 +395,10 @@ namespace LZ4Sharp
                         int hashPos = srcPos - 2;
                         if (hashPos + 4 <= srcSize)
                         {
-                            hashTable[HashPosition(source, hashPos)] = hashPos;
+                            int skipHash = options.UseAdaptiveHashSizing 
+                                ? HashPositionAdaptive(source, hashPos, hashLog)
+                                : HashPosition(source, hashPos);
+                            hashTable[skipHash] = hashPos;
                         }
                     }
                 }
@@ -714,6 +723,40 @@ namespace LZ4Sharp
                 return 0;
             uint value = BitConverter.ToUInt32(source, pos);
             return (int)((value * 2654435761u) >> (32 - HASH_LOG));
+        }
+
+        /// <summary>
+        /// Compute hash position with adaptive hash table sizing
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static int HashPositionAdaptive(byte[] source, int pos, int hashLog)
+        {
+            if (pos + 4 > source.Length)
+                return 0;
+            uint value = BitConverter.ToUInt32(source, pos);
+            return (int)((value * 2654435761u) >> (32 - hashLog));
+        }
+
+        /// <summary>
+        /// Determine optimal hash table size based on input data size
+        /// Smaller hash tables fit better in L1 cache (32KB typical)
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static int GetAdaptiveHashLog(int srcSize)
+        {
+            // Hash table size recommendations based on cache optimization:
+            // - 512 entries (2KB) fits entirely in L1 cache with room for other data
+            // - 1024 entries (4KB) still fits in L1 cache
+            // - 4096 entries (16KB) approaches L1 cache limit
+            
+            if (srcSize <= 4 * 1024)        // <= 4KB: use 512 entries (2KB table)
+                return 9;
+            if (srcSize <= 16 * 1024)       // <= 16KB: use 1024 entries (4KB table)
+                return 10;
+            if (srcSize <= 64 * 1024)       // <= 64KB: use 2048 entries (8KB table)
+                return 11;
+            
+            return 12;                      // > 64KB: use 4096 entries (16KB table)
         }
 
         /// <summary>
