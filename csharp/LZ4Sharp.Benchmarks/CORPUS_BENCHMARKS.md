@@ -97,6 +97,8 @@ Each benchmark measures:
 - **Memory Allocation**: Bytes allocated during operation (lower is better)
 - **Compression Ratio**: Size of compressed data vs original (implicit in results)
 
+See [CORPUS_RESULTS.md](CORPUS_RESULTS.md) for detailed benchmark results and performance analysis.
+
 ## Interpreting Results
 
 ### Performance Comparison

@@ -2,6 +2,13 @@
 
 This project contains performance benchmarks comparing LZ4Sharp against popular LZ4 C# NuGet packages.
 
+## Available Benchmarks
+
+1. **Quick Benchmarks** - Fast sanity checks with common data patterns
+2. **Comprehensive Benchmarks** - Full test suite with multiple sizes and patterns  
+3. **Standard Corpus Benchmarks** - Industry-standard compression test suites (Calgary, Canterbury, JSON)
+4. **Log Compression Profiling** - Real-world log data patterns
+
 ## Benchmark Results
 
 Benchmarks run on .NET 10.0.1 on AMD EPYC 7763 processor.
