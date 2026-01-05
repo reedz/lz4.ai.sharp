@@ -84,6 +84,20 @@ cd LZ4Sharp.Benchmarks
 dotnet run -c Release -- --filter "*LZ4CompressionBenchmarks*"
 ```
 
+### Log Compression Profiling (New!)
+```bash
+cd LZ4Sharp.Benchmarks
+dotnet run -c Release -- --filter "*LogCompressionProfilingBenchmarks*" --job short
+```
+
+This benchmark tests realistic log data patterns:
+- **Structured Logs**: Timestamp, log level, component, message format
+- **Unstructured Logs**: Varied formats and content
+- **Mixed Logs**: 70% structured, 30% unstructured (realistic scenario)
+- **JSON Logs**: JSON-formatted log entries (modern applications)
+
+See [PERFORMANCE_ANALYSIS.md](../../PERFORMANCE_ANALYSIS.md) for detailed profiling results and optimization recommendations.
+
 ### Specific Benchmark
 ```bash
 cd LZ4Sharp.Benchmarks
