@@ -1,6 +1,7 @@
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Configs;
 using BenchmarkDotNet.Jobs;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -511,7 +512,7 @@ namespace LZ4Sharp.Benchmarks
                         title = $"Post {j} by User {i}",
                         content = "Lorem ipsum dolor sit amet, consectetur adipiscing elit.",
                         tags = new[] { "technology", "programming", "compression" },
-                        timestamp = DateTime.UtcNow.AddDays(-i).ToString("o")
+                        timestamp = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddDays(-i).ToString("o")
                     }).ToArray()
                 }));
             }
@@ -525,18 +526,19 @@ namespace LZ4Sharp.Benchmarks
         /// </summary>
         private static byte[] GenerateJsonArrayData()
         {
+            var baseDate = new DateTime(2024, 1, 1, 0, 0, 0, DateTimeKind.Utc);
             var data = new
             {
                 metadata = new
                 {
                     version = "1.0",
-                    generated = DateTime.UtcNow.ToString("o"),
+                    generated = baseDate.ToString("o"),
                     recordCount = 2000
                 },
                 records = Enumerable.Range(0, 2000).Select(i => new
                 {
                     id = i,
-                    timestamp = DateTime.UtcNow.AddSeconds(-i).ToString("o"),
+                    timestamp = baseDate.AddSeconds(-i).ToString("o"),
                     value = 100.0 + (i % 100),
                     status = new[] { "active", "inactive", "pending" }[i % 3],
                     metadata = new Dictionary<string, object>
