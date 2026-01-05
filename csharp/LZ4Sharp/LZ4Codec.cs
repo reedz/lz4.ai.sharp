@@ -42,15 +42,6 @@ namespace LZ4Sharp
     /// </summary>
     public static class LZ4Codec
     {
-        // Feature flags
-        // Define LZ4_ENABLE_SIMD_HASHING to enable SIMD-based parallel hash computation
-        // This can provide 15-25% compression speedup on AVX2-capable CPUs
-#if LZ4_ENABLE_SIMD_HASHING
-        private const bool USE_SIMD_HASHING = true;
-#else
-        private const bool USE_SIMD_HASHING = false;
-#endif
-
         // Constants from the C implementation
         private const int MINMATCH = 4;
         private const int WILDCOPYLENGTH = 8;
@@ -86,7 +77,21 @@ namespace LZ4Sharp
         /// <returns>Size of compressed data, or negative value on error</returns>
         public static int CompressDefault(byte[] source, byte[] destination, int sourceSize, int maxDestinationSize)
         {
-            return CompressFast(source, destination, sourceSize, maxDestinationSize, ACCELERATION_DEFAULT);
+            return CompressFast(source, destination, sourceSize, maxDestinationSize, ACCELERATION_DEFAULT, LZ4Options.Default);
+        }
+
+        /// <summary>
+        /// Compress data using LZ4 algorithm with default acceleration and custom options
+        /// </summary>
+        /// <param name="source">Source data to compress</param>
+        /// <param name="destination">Destination buffer for compressed data</param>
+        /// <param name="sourceSize">Size of source data</param>
+        /// <param name="maxDestinationSize">Maximum size of destination buffer</param>
+        /// <param name="options">Compression options (e.g., SIMD hashing)</param>
+        /// <returns>Size of compressed data, or negative value on error</returns>
+        public static int CompressDefault(byte[] source, byte[] destination, int sourceSize, int maxDestinationSize, LZ4Options options)
+        {
+            return CompressFast(source, destination, sourceSize, maxDestinationSize, ACCELERATION_DEFAULT, options);
         }
 
         /// <summary>
@@ -98,7 +103,19 @@ namespace LZ4Sharp
         /// <returns>Size of compressed data, or negative value on error</returns>
         public static int CompressDefault(ReadOnlySpan<byte> source, Span<byte> destination)
         {
-            return CompressFast(source, destination, ACCELERATION_DEFAULT);
+            return CompressFast(source, destination, ACCELERATION_DEFAULT, LZ4Options.Default);
+        }
+
+        /// <summary>
+        /// Phase 2 Optimization: Span-based compression with custom options
+        /// </summary>
+        /// <param name="source">Source data to compress</param>
+        /// <param name="destination">Destination buffer for compressed data</param>
+        /// <param name="options">Compression options (e.g., SIMD hashing)</param>
+        /// <returns>Size of compressed data, or negative value on error</returns>
+        public static int CompressDefault(ReadOnlySpan<byte> source, Span<byte> destination, LZ4Options options)
+        {
+            return CompressFast(source, destination, ACCELERATION_DEFAULT, options);
         }
 
         /// <summary>
@@ -112,13 +129,30 @@ namespace LZ4Sharp
         /// <returns>Size of compressed data, or negative value on error</returns>
         public static int CompressFast(byte[] source, byte[] destination, int sourceSize, int maxDestinationSize, int acceleration)
         {
+            return CompressFast(source, destination, sourceSize, maxDestinationSize, acceleration, LZ4Options.Default);
+        }
+
+        /// <summary>
+        /// Compress data using LZ4 algorithm with custom options
+        /// </summary>
+        /// <param name="source">Source data to compress</param>
+        /// <param name="destination">Destination buffer for compressed data</param>
+        /// <param name="sourceSize">Size of source data</param>
+        /// <param name="maxDestinationSize">Maximum size of destination buffer</param>
+        /// <param name="acceleration">Acceleration factor (1 = default, higher = faster but less compression)</param>
+        /// <param name="options">Compression options (e.g., SIMD hashing)</param>
+        /// <returns>Size of compressed data, or negative value on error</returns>
+        public static int CompressFast(byte[] source, byte[] destination, int sourceSize, int maxDestinationSize, int acceleration, LZ4Options options)
+        {
             if (source == null || destination == null || sourceSize <= 0 || maxDestinationSize <= 0)
                 return -1;
 
             if (acceleration < 1) acceleration = ACCELERATION_DEFAULT;
             if (acceleration > ACCELERATION_MAX) acceleration = ACCELERATION_MAX;
 
-            return CompressGeneric(source, destination, sourceSize, maxDestinationSize, acceleration);
+            options ??= LZ4Options.Default;
+
+            return CompressGeneric(source, destination, sourceSize, maxDestinationSize, acceleration, options);
         }
 
         /// <summary>
@@ -131,13 +165,28 @@ namespace LZ4Sharp
         /// <returns>Size of compressed data, or negative value on error</returns>
         public static int CompressFast(ReadOnlySpan<byte> source, Span<byte> destination, int acceleration = ACCELERATION_DEFAULT)
         {
+            return CompressFast(source, destination, acceleration, LZ4Options.Default);
+        }
+
+        /// <summary>
+        /// Phase 2 Optimization: Span-based compression with custom options
+        /// </summary>
+        /// <param name="source">Source data to compress</param>
+        /// <param name="destination">Destination buffer for compressed data</param>
+        /// <param name="acceleration">Acceleration factor (1 = default, higher = faster but less compression)</param>
+        /// <param name="options">Compression options (e.g., SIMD hashing)</param>
+        /// <returns>Size of compressed data, or negative value on error</returns>
+        public static int CompressFast(ReadOnlySpan<byte> source, Span<byte> destination, int acceleration, LZ4Options options)
+        {
             if (source.Length <= 0 || destination.Length <= 0)
                 return -1;
 
             if (acceleration < 1) acceleration = ACCELERATION_DEFAULT;
             if (acceleration > ACCELERATION_MAX) acceleration = ACCELERATION_MAX;
 
-            return CompressGenericSpan(source, destination, acceleration);
+            options ??= LZ4Options.Default;
+
+            return CompressGenericSpan(source, destination, acceleration, options);
         }
 
         /// <summary>
@@ -191,7 +240,7 @@ namespace LZ4Sharp
             return DecompressGenericWithOffset(source, destination, compressedSize, maxDecompressedSize, dstOffset);
         }
 
-        private static int CompressGeneric(byte[] source, byte[] destination, int srcSize, int dstCapacity, int acceleration)
+        private static int CompressGeneric(byte[] source, byte[] destination, int srcSize, int dstCapacity, int acceleration, LZ4Options options)
         {
             int srcPos = 0;
             int dstPos = 0;
@@ -226,9 +275,8 @@ namespace LZ4Sharp
                     // Find a match
                     int matchPos = -1;
                     
-#if LZ4_ENABLE_SIMD_HASHING
                     // SIMD-accelerated match finding: process 4 positions at a time
-                    if (USE_SIMD_HASHING && Sse2.IsSupported && forwardPos + 16 <= srcSize)
+                    if (options.UseSIMDHashing && Sse2.IsSupported && forwardPos + 16 <= srcSize)
                     {
                         // Try SIMD path first
                         int positionsProcessed = ProcessPositions4_SIMD(
@@ -253,7 +301,6 @@ namespace LZ4Sharp
                     // Continue with standard search if SIMD didn't find a match
                     if (matchPos < 0)
                     {
-#endif
                         do
                         {
                             // Ensure we don't read past the end when calculating hash
@@ -277,9 +324,7 @@ namespace LZ4Sharp
                             // Phase 1 Optimization: Combine step increment with forward position update
                             forwardPos += (searchMatchNb++ >> 6);
                         } while (forwardPos < srcLimit);
-#if LZ4_ENABLE_SIMD_HASHING
                     }
-#endif
 
                     if (matchPos < 0)
                     {
@@ -671,11 +716,10 @@ namespace LZ4Sharp
             return (int)((value * 2654435761u) >> (32 - HASH_LOG));
         }
 
-#if LZ4_ENABLE_SIMD_HASHING
         /// <summary>
         /// SIMD-based parallel hash computation for 4 consecutive positions
-        /// Enabled when LZ4_ENABLE_SIMD_HASHING is defined
-        /// Provides 15-25% speedup on AVX2-capable systems
+        /// Used when UseSIMDHashing option is enabled
+        /// Provides 15-25% speedup on SSE2-capable systems
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void HashPosition4_SIMD(byte[] source, int pos, out int h0, out int h1, out int h2, out int h3)
@@ -770,7 +814,6 @@ namespace LZ4Sharp
             
             return 4; // All 4 positions processed, no match found
         }
-#endif
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static bool AreEqual(byte[] source, int pos1, int pos2, int length)
@@ -1026,7 +1069,7 @@ namespace LZ4Sharp
         /// <summary>
         /// Phase 2 Optimization: Span-based compression implementation
         /// </summary>
-        private static int CompressGenericSpan(ReadOnlySpan<byte> source, Span<byte> destination, int acceleration)
+        private static int CompressGenericSpan(ReadOnlySpan<byte> source, Span<byte> destination, int acceleration, LZ4Options options)
         {
             int srcSize = source.Length;
             int dstCapacity = destination.Length;
