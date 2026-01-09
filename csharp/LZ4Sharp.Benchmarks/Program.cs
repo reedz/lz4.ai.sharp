@@ -30,6 +30,12 @@ namespace LZ4Sharp.Benchmarks
                 return;
             }
             
+            if (args.Length > 0 && args[0] == "--deep-profile")
+            {
+                DetailedProfiler.Run();
+                return;
+            }
+            
             BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
         }
     }

@@ -712,8 +712,29 @@ namespace LZ4Sharp
                 if (cpy > oend || ip + length > iend)
                     return -1;
 
-                // Copy literals using 8-byte chunks
-                if (length >= 16)
+                // Copy literals using SIMD - AVX-512 for large copies
+                if (length >= 64 && Avx512F.IsSupported)
+                {
+                    byte* copyEnd = cpy;
+                    while (op + 64 <= copyEnd)
+                    {
+                        Avx512F.Store(op, Avx512F.LoadVector512(ip));
+                        op += 64;
+                        ip += 64;
+                    }
+                    while (op + 32 <= copyEnd)
+                    {
+                        Avx.Store(op, Avx.LoadVector256(ip));
+                        op += 32;
+                        ip += 32;
+                    }
+                    while (op < copyEnd)
+                    {
+                        *op++ = *ip++;
+                    }
+                    op = copyEnd;
+                }
+                else if (length >= 16)
                 {
                     byte* copyEnd = cpy;
                     do
@@ -910,8 +931,43 @@ namespace LZ4Sharp
         {
             byte* pStart = pIn;
 
+            // Use AVX-512 for 64-byte comparisons when available (fastest path)
+            if (Avx512BW.IsSupported)
+            {
+                while (pIn + 64 <= pInLimit)
+                {
+                    var a = Avx512F.LoadVector512(pIn);
+                    var b = Avx512F.LoadVector512(pMatch);
+                    ulong mask = Avx512BW.CompareEqual(a, b).ExtractMostSignificantBits();
+                    if (mask != 0xFFFFFFFFFFFFFFFF)
+                    {
+                        // Find first difference
+                        ulong diff = ~mask;
+                        int pos = System.Numerics.BitOperations.TrailingZeroCount(diff);
+                        return (uint)(pIn - pStart) + (uint)pos;
+                    }
+                    pIn += 64;
+                    pMatch += 64;
+                }
+                
+                // Handle remaining 32+ bytes with AVX-512 (256-bit mode)
+                if (pIn + 32 <= pInLimit)
+                {
+                    var a = Avx512F.LoadVector256(pIn);
+                    var b = Avx512F.LoadVector256(pMatch);
+                    uint mask = Avx512BW.CompareEqual(a, b).ExtractMostSignificantBits();
+                    if (mask != 0xFFFFFFFF)
+                    {
+                        uint diff = ~mask;
+                        int pos = System.Numerics.BitOperations.TrailingZeroCount(diff);
+                        return (uint)(pIn - pStart) + (uint)pos;
+                    }
+                    pIn += 32;
+                    pMatch += 32;
+                }
+            }
             // Use AVX2 for 32-byte comparisons when available
-            if (Avx2.IsSupported)
+            else if (Avx2.IsSupported)
             {
                 while (pIn + 32 <= pInLimit)
                 {
@@ -1063,8 +1119,25 @@ namespace LZ4Sharp
                 return;
             }
             
+            // Use AVX-512 for 64-byte copies when available (fastest path)
+            if (Avx512F.IsSupported)
+            {
+                while (dst + 64 <= dstEnd)
+                {
+                    Avx512F.Store(dst, Avx512F.LoadVector512(src));
+                    dst += 64;
+                    src += 64;
+                }
+                // Handle remaining 32+ bytes
+                if (dst + 32 <= dstEnd)
+                {
+                    Avx.Store(dst, Avx.LoadVector256(src));
+                    dst += 32;
+                    src += 32;
+                }
+            }
             // Use AVX2 for 32-byte copies when available
-            if (Avx2.IsSupported)
+            else if (Avx2.IsSupported)
             {
                 while (dst + 32 <= dstEnd)
                 {
