@@ -5,6 +5,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     
+    <!-- Enable unsafe code for high-performance pointer-based operations -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    
     <!-- Phase 1 Optimization: Enable Profile-Guided Optimization for 3-7% speedup -->
     <TieredCompilation>true</TieredCompilation>
     <TieredCompilationQuickJit>false</TieredCompilationQuickJit>
