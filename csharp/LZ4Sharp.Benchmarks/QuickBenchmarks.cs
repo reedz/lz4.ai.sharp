@@ -15,8 +15,10 @@ namespace LZ4Sharp.Benchmarks
     {
         private byte[] _data = null!;
         private byte[] _compressedLZ4Sharp = null!;
+        private byte[] _compressedLZ4SharpUnsafe = null!;
         private byte[] _compressedK4os = null!;
         private int _compressedSizeLZ4Sharp;
+        private int _compressedSizeLZ4SharpUnsafe;
         private int _compressedSizeK4os;
 
         [Params(10 * 1024, 100 * 1024)]
@@ -35,6 +37,10 @@ namespace LZ4Sharp.Benchmarks
             _compressedLZ4Sharp = new byte[maxCompressedSize];
             _compressedSizeLZ4Sharp = LZ4Codec.CompressDefault(_data, _compressedLZ4Sharp, DataSize, maxCompressedSize);
 
+            // Setup LZ4Sharp Unsafe
+            _compressedLZ4SharpUnsafe = new byte[maxCompressedSize];
+            _compressedSizeLZ4SharpUnsafe = LZ4Codec.CompressDefault(_data, _compressedLZ4SharpUnsafe, DataSize, maxCompressedSize);
+
             // Setup K4os
             _compressedK4os = new byte[K4os.Compression.LZ4.LZ4Codec.MaximumOutputSize(DataSize)];
             _compressedSizeK4os = K4os.Compression.LZ4.LZ4Codec.Encode(
@@ -47,6 +53,13 @@ namespace LZ4Sharp.Benchmarks
         public int CompressLZ4Sharp()
         {
             var dest = new byte[_compressedLZ4Sharp.Length];
+            return LZ4Codec.CompressDefault(_data, dest, DataSize, dest.Length);
+        }
+
+        [Benchmark(Description = "LZ4Sharp.Unsafe - Compress")]
+        public int CompressLZ4SharpUnsafe()
+        {
+            var dest = new byte[_compressedLZ4SharpUnsafe.Length];
             return LZ4Codec.CompressDefault(_data, dest, DataSize, dest.Length);
         }
 
@@ -65,6 +78,13 @@ namespace LZ4Sharp.Benchmarks
         {
             var dest = new byte[DataSize];
             return LZ4Codec.DecompressSafe(_compressedLZ4Sharp, dest, _compressedSizeLZ4Sharp, DataSize);
+        }
+
+        [Benchmark(Description = "LZ4Sharp.Unsafe - Decompress")]
+        public int DecompressLZ4SharpUnsafe()
+        {
+            var dest = new byte[DataSize];
+            return LZ4Codec.DecompressSafe(_compressedLZ4SharpUnsafe, dest, _compressedSizeLZ4SharpUnsafe, DataSize);
         }
 
         [Benchmark(Description = "K4os.LZ4 - Decompress")]

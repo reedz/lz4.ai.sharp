@@ -1,32 +1,13 @@
 /*
  * LZ4 - Fast LZ compression algorithm
- * C# Implementation
+ * C# Implementation - Unsafe optimized version
  * Copyright (c) 2026. Translated from C implementation by Yann Collet.
  * 
  * BSD 2-Clause License (http://www.opensource.org/licenses/bsd-license.php)
  * 
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are
- * met:
- * 
- *     * Redistributions of source code must retain the above copyright
- * notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above
- * copyright notice, this list of conditions and the following disclaimer
- * in the documentation and/or other materials provided with the
- * distribution.
- * 
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * This file provides an unsafe implementation for maximum performance.
+ * It uses pointer arithmetic similar to K4os.Compression.LZ4 to eliminate
+ * bounds checking overhead and achieve near-native performance.
  */
 
 using System;
@@ -34,29 +15,44 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
+using System.Buffers;
+
+[module: SkipLocalsInit]
 
 namespace LZ4Sharp
 {
     /// <summary>
-    /// LZ4 Codec - Fast compression and decompression
+    /// LZ4 Codec - Unsafe optimized implementation for maximum performance
+    /// Uses pointer arithmetic to eliminate bounds checking overhead
     /// </summary>
-    public static class LZ4Codec
+    public static unsafe class LZ4Codec
     {
         // Constants from the C implementation
         private const int MINMATCH = 4;
-        private const int WILDCOPYLENGTH = 8;
         private const int LASTLITERALS = 5;
-        private const int MFLIMIT = WILDCOPYLENGTH + MINMATCH;
+        private const int MFLIMIT = 12; // WILDCOPYLENGTH + MINMATCH
         private const int ML_BITS = 4;
         private const int ML_MASK = (1 << ML_BITS) - 1;
         private const int RUN_BITS = 8 - ML_BITS;
         private const int RUN_MASK = (1 << RUN_BITS) - 1;
-        private const int ACCELERATION_DEFAULT = 1;
-        private const int ACCELERATION_MAX = 65537;
-        private const int HASH_LOG = 12;
+        private const int LZ4_SKIP_TRIGGER = 6;
+        private const int HASH_LOG = 12; // Standard LZ4 hash log for small inputs
+        private const int HASH_LOG_LARGE = 14; // Larger hash log for big inputs (16K entries)
         private const int HASH_SIZE = 1 << HASH_LOG;
-        private const int LZ4_64KLIMIT = (64 * 1024) + (MFLIMIT - 1);
+        private const int HASH_SIZE_LARGE = 1 << HASH_LOG_LARGE;
         private const int LZ4_DISTANCE_MAX = 65535;
+        private const int LZ4_64Klimit = 65536 + MFLIMIT - 1;
+        
+        // Hash multipliers (same as K4os/original LZ4)
+        private const uint HASH_MULT_4 = 2654435761u;
+        private const ulong HASH_MULT_5 = 889523592379ul;
+
+        // Thread-local hash tables to avoid allocation overhead
+        [ThreadStatic]
+        private static uint[]? t_hashTable;
+        
+        [ThreadStatic]
+        private static uint[]? t_hashTableLarge;
 
         /// <summary>
         /// Gets the maximum compressed size for a given input size
@@ -68,156 +64,495 @@ namespace LZ4Sharp
         }
 
         /// <summary>
-        /// Compress data using LZ4 algorithm with default acceleration
+        /// Compress data using LZ4 algorithm with maximum performance (unsafe)
         /// </summary>
-        /// <param name="source">Source data to compress</param>
-        /// <param name="destination">Destination buffer for compressed data</param>
-        /// <param name="sourceSize">Size of source data</param>
-        /// <param name="maxDestinationSize">Maximum size of destination buffer</param>
-        /// <returns>Size of compressed data, or negative value on error</returns>
         public static int CompressDefault(byte[] source, byte[] destination, int sourceSize, int maxDestinationSize)
-        {
-            return CompressFast(source, destination, sourceSize, maxDestinationSize, ACCELERATION_DEFAULT, LZ4Options.Default);
-        }
-
-        /// <summary>
-        /// Compress data using LZ4 algorithm with default acceleration and custom options
-        /// </summary>
-        /// <param name="source">Source data to compress</param>
-        /// <param name="destination">Destination buffer for compressed data</param>
-        /// <param name="sourceSize">Size of source data</param>
-        /// <param name="maxDestinationSize">Maximum size of destination buffer</param>
-        /// <param name="options">Compression options (e.g., SIMD hashing)</param>
-        /// <returns>Size of compressed data, or negative value on error</returns>
-        public static int CompressDefault(byte[] source, byte[] destination, int sourceSize, int maxDestinationSize, LZ4Options options)
-        {
-            return CompressFast(source, destination, sourceSize, maxDestinationSize, ACCELERATION_DEFAULT, options);
-        }
-
-        /// <summary>
-        /// Phase 2 Optimization: Span-based compression for zero-copy operations
-        /// Compress data using LZ4 algorithm with default acceleration
-        /// </summary>
-        /// <param name="source">Source data to compress</param>
-        /// <param name="destination">Destination buffer for compressed data</param>
-        /// <returns>Size of compressed data, or negative value on error</returns>
-        public static int CompressDefault(ReadOnlySpan<byte> source, Span<byte> destination)
-        {
-            return CompressFast(source, destination, ACCELERATION_DEFAULT, LZ4Options.Default);
-        }
-
-        /// <summary>
-        /// Phase 2 Optimization: Span-based compression with custom options
-        /// </summary>
-        /// <param name="source">Source data to compress</param>
-        /// <param name="destination">Destination buffer for compressed data</param>
-        /// <param name="options">Compression options (e.g., SIMD hashing)</param>
-        /// <returns>Size of compressed data, or negative value on error</returns>
-        public static int CompressDefault(ReadOnlySpan<byte> source, Span<byte> destination, LZ4Options options)
-        {
-            return CompressFast(source, destination, ACCELERATION_DEFAULT, options);
-        }
-
-        /// <summary>
-        /// Compress data using LZ4 algorithm
-        /// </summary>
-        /// <param name="source">Source data to compress</param>
-        /// <param name="destination">Destination buffer for compressed data</param>
-        /// <param name="sourceSize">Size of source data</param>
-        /// <param name="maxDestinationSize">Maximum size of destination buffer</param>
-        /// <param name="acceleration">Acceleration factor (1 = default, higher = faster but less compression)</param>
-        /// <returns>Size of compressed data, or negative value on error</returns>
-        public static int CompressFast(byte[] source, byte[] destination, int sourceSize, int maxDestinationSize, int acceleration)
-        {
-            return CompressFast(source, destination, sourceSize, maxDestinationSize, acceleration, LZ4Options.Default);
-        }
-
-        /// <summary>
-        /// Compress data using LZ4 algorithm with custom options
-        /// </summary>
-        /// <param name="source">Source data to compress</param>
-        /// <param name="destination">Destination buffer for compressed data</param>
-        /// <param name="sourceSize">Size of source data</param>
-        /// <param name="maxDestinationSize">Maximum size of destination buffer</param>
-        /// <param name="acceleration">Acceleration factor (1 = default, higher = faster but less compression)</param>
-        /// <param name="options">Compression options (e.g., SIMD hashing)</param>
-        /// <returns>Size of compressed data, or negative value on error</returns>
-        public static int CompressFast(byte[] source, byte[] destination, int sourceSize, int maxDestinationSize, int acceleration, LZ4Options options)
         {
             if (source == null || destination == null || sourceSize <= 0 || maxDestinationSize <= 0)
                 return -1;
 
-            if (acceleration < 1) acceleration = ACCELERATION_DEFAULT;
-            if (acceleration > ACCELERATION_MAX) acceleration = ACCELERATION_MAX;
-
-            options ??= LZ4Options.Default;
-
-            return CompressGeneric(source, destination, sourceSize, maxDestinationSize, acceleration, options);
+            fixed (byte* srcPtr = source)
+            fixed (byte* dstPtr = destination)
+            {
+                return CompressUnsafe(srcPtr, dstPtr, sourceSize, maxDestinationSize);
+            }
         }
 
         /// <summary>
-        /// Phase 2 Optimization: Span-based compression for zero-copy operations
-        /// Compress data using LZ4 algorithm
+        /// Compress data using LZ4 algorithm with Span interface (unsafe internally)
         /// </summary>
-        /// <param name="source">Source data to compress</param>
-        /// <param name="destination">Destination buffer for compressed data</param>
-        /// <param name="acceleration">Acceleration factor (1 = default, higher = faster but less compression)</param>
-        /// <returns>Size of compressed data, or negative value on error</returns>
-        public static int CompressFast(ReadOnlySpan<byte> source, Span<byte> destination, int acceleration = ACCELERATION_DEFAULT)
-        {
-            return CompressFast(source, destination, acceleration, LZ4Options.Default);
-        }
-
-        /// <summary>
-        /// Phase 2 Optimization: Span-based compression with custom options
-        /// </summary>
-        /// <param name="source">Source data to compress</param>
-        /// <param name="destination">Destination buffer for compressed data</param>
-        /// <param name="acceleration">Acceleration factor (1 = default, higher = faster but less compression)</param>
-        /// <param name="options">Compression options (e.g., SIMD hashing)</param>
-        /// <returns>Size of compressed data, or negative value on error</returns>
-        public static int CompressFast(ReadOnlySpan<byte> source, Span<byte> destination, int acceleration, LZ4Options options)
+        public static int CompressDefault(ReadOnlySpan<byte> source, Span<byte> destination)
         {
             if (source.Length <= 0 || destination.Length <= 0)
                 return -1;
 
-            if (acceleration < 1) acceleration = ACCELERATION_DEFAULT;
-            if (acceleration > ACCELERATION_MAX) acceleration = ACCELERATION_MAX;
+            fixed (byte* srcPtr = source)
+            fixed (byte* dstPtr = destination)
+            {
+                return CompressUnsafe(srcPtr, dstPtr, source.Length, destination.Length);
+            }
+        }
 
-            options ??= LZ4Options.Default;
+        /// <summary>
+        /// Core unsafe compression implementation
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        private static int CompressUnsafe(byte* source, byte* dest, int inputSize, int maxOutputSize)
+        {
+            if (inputSize < MFLIMIT)
+            {
+                return CompressSmallUnsafe(source, dest, inputSize, maxOutputSize);
+            }
 
-            return CompressGenericSpan(source, destination, acceleration, options);
+            // Optimization 2A: Separate compression paths to eliminate branch in hot loop
+            // Use 5-byte hash for larger inputs (>= 64KB) like K4os does
+            if (inputSize >= LZ4_64Klimit)
+            {
+                return CompressLargeInput(source, dest, inputSize, maxOutputSize);
+            }
+            else
+            {
+                return CompressMediumInput(source, dest, inputSize, maxOutputSize);
+            }
+        }
+
+        /// <summary>
+        /// Compression for medium inputs (&lt;64KB) using 4-byte hash - no branch in hot loop
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        private static int CompressMediumInput(byte* source, byte* dest, int inputSize, int maxOutputSize)
+        {
+            byte* ip = source;
+            byte* ibase = source;
+            byte* iend = source + inputSize;
+            byte* mflimitPlusOne = iend - MFLIMIT + 1;
+            byte* matchlimit = iend - LASTLITERALS;
+
+            byte* op = dest;
+            byte* olimit = dest + maxOutputSize;
+
+            byte* anchor = source;
+
+            // Use thread-local hash table to avoid allocation overhead
+            uint[] hashTableArray = t_hashTable ??= new uint[HASH_SIZE];
+            // Optimization 1C: Use Span.Clear which is SIMD-accelerated
+            hashTableArray.AsSpan(0, HASH_SIZE).Clear();
+            
+            fixed (uint* hashTable = hashTableArray)
+            {
+                // First byte - use Hash4 directly (no branch)
+                hashTable[Hash4(ip)] = (uint)(ip - ibase);
+                ip++;
+                uint forwardH = Hash4(ip);
+
+                // Main loop
+                for (;;)
+                {
+                    byte* match;
+                    byte* token;
+
+                        // Find a match
+                        {
+                            byte* forwardIp = ip;
+                            int step = 1;
+                            int searchMatchNb = 1 << LZ4_SKIP_TRIGGER;
+
+                            do
+                            {
+                                uint h = forwardH;
+                                ip = forwardIp;
+                                forwardIp += step;
+                                step = searchMatchNb++ >> LZ4_SKIP_TRIGGER;
+
+                                if (forwardIp > mflimitPlusOne)
+                                    goto _last_literals;
+
+                                match = ibase + hashTable[h];
+                                
+                                // Prefetch next hash entry
+                                forwardH = Hash4(forwardIp);
+                                if (Sse.IsSupported)
+                                {
+                                    Sse.Prefetch0(&hashTable[forwardH]);
+                                }
+                                
+                                hashTable[h] = (uint)(ip - ibase);
+                            }
+                            while ((match + LZ4_DISTANCE_MAX < ip) || (Peek4(match) != Peek4(ip)));
+                        }
+
+                        // Catch up: check if we can extend the match backwards
+                        while ((ip > anchor) && (match > source) && (ip[-1] == match[-1]))
+                        {
+                            ip--;
+                            match--;
+                        }
+
+                        // Encode literals
+                        {
+                            uint litLength = (uint)(ip - anchor);
+                            token = op++;
+
+                            if (op + litLength + (2 + 1 + LASTLITERALS) + (litLength / 255) > olimit)
+                                return 0; // Not enough space
+
+                            if (litLength >= RUN_MASK)
+                            {
+                                int len = (int)(litLength - RUN_MASK);
+                                *token = (byte)(RUN_MASK << ML_BITS);
+                                // Aggressive optimization: Unroll length encoding
+                                while (len >= 4 * 255)
+                                {
+                                    *(uint*)op = 0xFFFFFFFF;
+                                    op += 4;
+                                    len -= 4 * 255;
+                                }
+                                while (len >= 255)
+                                {
+                                    *op++ = 255;
+                                    len -= 255;
+                                }
+                                *op++ = (byte)len;
+                            }
+                            else
+                            {
+                                *token = (byte)(litLength << ML_BITS);
+                            }
+
+                            // Copy literals using WildCopy for performance
+                            WildCopy8(op, anchor, op + litLength);
+                            op += litLength;
+                        }
+
+                    _next_match:
+                        // Encode offset
+                        Poke2(op, (ushort)(ip - match));
+                        op += 2;
+
+                        // Encode match length
+                        {
+                            uint matchCode = LZ4_count(ip + MINMATCH, match + MINMATCH, matchlimit);
+                            ip += matchCode + MINMATCH;
+
+                            if (op + (1 + LASTLITERALS) + (matchCode + 240) / 255 > olimit)
+                                return 0; // Not enough space
+
+                            if (matchCode >= ML_MASK)
+                            {
+                                *token += ML_MASK;
+                                matchCode -= ML_MASK;
+                                // Aggressive optimization: Fast path for match length encoding
+                                while (matchCode >= 4 * 255)
+                                {
+                                    *(uint*)op = 0xFFFFFFFF;
+                                    op += 4;
+                                    matchCode -= 4 * 255;
+                                }
+                                while (matchCode >= 255)
+                                {
+                                    *op++ = 255;
+                                    matchCode -= 255;
+                                }
+                                *op++ = (byte)matchCode;
+                            }
+                            else
+                            {
+                                *token += (byte)matchCode;
+                            }
+                        }
+
+                        anchor = ip;
+
+                        // Test end of chunk
+                        if (ip >= mflimitPlusOne)
+                            break;
+
+                        // Fill table - use Hash4 directly
+                        hashTable[Hash4(ip - 2)] = (uint)(ip - 2 - ibase);
+
+                        // Test next position
+                        {
+                            uint h = Hash4(ip);
+                            match = ibase + hashTable[h];
+                            hashTable[h] = (uint)(ip - ibase);
+
+                            if ((match + LZ4_DISTANCE_MAX >= ip) && (Peek4(match) == Peek4(ip)))
+                            {
+                                token = op++;
+                                *token = 0;
+                                goto _next_match;
+                            }
+                        }
+
+                        forwardH = Hash4(++ip);
+                    }
+
+                _last_literals:
+                    // Encode last literals
+                    {
+                        uint lastRun = (uint)(iend - anchor);
+                        
+                        if (op + lastRun + 1 + ((lastRun + 255 - RUN_MASK) / 255) > olimit)
+                            return 0; // Not enough space
+
+                        if (lastRun >= RUN_MASK)
+                        {
+                            uint accumulator = lastRun - RUN_MASK;
+                            *op++ = (byte)(RUN_MASK << ML_BITS);
+                            while (accumulator >= 255)
+                            {
+                                *op++ = 255;
+                                accumulator -= 255;
+                            }
+                            *op++ = (byte)accumulator;
+                        }
+                        else
+                        {
+                            *op++ = (byte)(lastRun << ML_BITS);
+                        }
+
+                        Copy(op, anchor, (int)lastRun);
+                        op += lastRun;
+                    }
+
+                    return (int)(op - dest);
+            }
+        }
+
+        /// <summary>
+        /// Compression for large inputs (>=64KB) using 5-byte hash with larger hash table
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        private static int CompressLargeInput(byte* source, byte* dest, int inputSize, int maxOutputSize)
+        {
+            byte* ip = source;
+            byte* ibase = source;
+            byte* iend = source + inputSize;
+            byte* mflimitPlusOne = iend - MFLIMIT + 1;
+            byte* matchlimit = iend - LASTLITERALS;
+
+            byte* op = dest;
+            byte* olimit = dest + maxOutputSize;
+
+            byte* anchor = source;
+
+            // Use dedicated large hash table with fast SIMD clear
+            uint[] hashTableArray = t_hashTableLarge ??= new uint[HASH_SIZE_LARGE];
+            hashTableArray.AsSpan(0, HASH_SIZE_LARGE).Clear();
+            
+            fixed (uint* hashTable = hashTableArray)
+            {
+                // First byte - use Hash5Large directly
+                hashTable[Hash5Large(ip)] = (uint)(ip - ibase);
+                ip++;
+                uint forwardH = Hash5Large(ip);
+
+                // Main loop
+                for (;;)
+                {
+                    byte* match;
+                    byte* token;
+
+                        // Find a match
+                        {
+                            byte* forwardIp = ip;
+                            int step = 1;
+                            int searchMatchNb = 1 << LZ4_SKIP_TRIGGER;
+
+                            do
+                            {
+                                uint h = forwardH;
+                                ip = forwardIp;
+                                forwardIp += step;
+                                step = searchMatchNb++ >> LZ4_SKIP_TRIGGER;
+
+                                if (forwardIp > mflimitPlusOne)
+                                    goto _last_literals;
+
+                                match = ibase + hashTable[h];
+                                
+                                // Compute next hash
+                                forwardH = Hash5Large(forwardIp);
+                                
+                                hashTable[h] = (uint)(ip - ibase);
+                            }
+                            while ((match + LZ4_DISTANCE_MAX < ip) || (Peek4(match) != Peek4(ip)));
+                        }
+
+                        // Catch up: check if we can extend the match backwards
+                        while ((ip > anchor) && (match > source) && (ip[-1] == match[-1]))
+                        {
+                            ip--;
+                            match--;
+                        }
+
+                        // Encode literals
+                        {
+                            uint litLength = (uint)(ip - anchor);
+                            token = op++;
+
+                            if (op + litLength + (2 + 1 + LASTLITERALS) + (litLength / 255) > olimit)
+                                return 0; // Not enough space
+
+                            if (litLength >= RUN_MASK)
+                            {
+                                int len = (int)(litLength - RUN_MASK);
+                                *token = (byte)(RUN_MASK << ML_BITS);
+                                // Aggressive optimization: Unroll length encoding for common cases
+                                while (len >= 4 * 255)
+                                {
+                                    *(uint*)op = 0xFFFFFFFF;
+                                    op += 4;
+                                    len -= 4 * 255;
+                                }
+                                while (len >= 255)
+                                {
+                                    *op++ = 255;
+                                    len -= 255;
+                                }
+                                *op++ = (byte)len;
+                            }
+                            else
+                            {
+                                *token = (byte)(litLength << ML_BITS);
+                            }
+
+                            // Copy literals using WildCopy for performance
+                            WildCopy8(op, anchor, op + litLength);
+                            op += litLength;
+                        }
+
+                    _next_match:
+                        // Encode offset
+                        Poke2(op, (ushort)(ip - match));
+                        op += 2;
+
+                        // Encode match length
+                        {
+                            uint matchCode = LZ4_count(ip + MINMATCH, match + MINMATCH, matchlimit);
+                            ip += matchCode + MINMATCH;
+
+                            if (op + (1 + LASTLITERALS) + (matchCode + 240) / 255 > olimit)
+                                return 0; // Not enough space
+
+                            if (matchCode >= ML_MASK)
+                            {
+                                *token += ML_MASK;
+                                matchCode -= ML_MASK;
+                                // Aggressive optimization: Fast path for common match lengths
+                                while (matchCode >= 4 * 255)
+                                {
+                                    *(uint*)op = 0xFFFFFFFF;
+                                    op += 4;
+                                    matchCode -= 4 * 255;
+                                }
+                                while (matchCode >= 255)
+                                {
+                                    *op++ = 255;
+                                    matchCode -= 255;
+                                }
+                                *op++ = (byte)matchCode;
+                            }
+                            else
+                            {
+                                *token += (byte)matchCode;
+                            }
+                        }
+
+                        anchor = ip;
+
+                        // Test end of chunk
+                        if (ip >= mflimitPlusOne)
+                            break;
+
+                        // Fill table - use Hash5Large
+                        hashTable[Hash5Large(ip - 2)] = (uint)(ip - 2 - ibase);
+
+                        // Test next position
+                        {
+                            uint h = Hash5Large(ip);
+                            match = ibase + hashTable[h];
+                            hashTable[h] = (uint)(ip - ibase);
+
+                            if ((match + LZ4_DISTANCE_MAX >= ip) && (Peek4(match) == Peek4(ip)))
+                            {
+                                token = op++;
+                                *token = 0;
+                                goto _next_match;
+                            }
+                        }
+
+                        forwardH = Hash5Large(++ip);
+                    }
+
+                _last_literals:
+                    // Encode last literals
+                    {
+                        uint lastRun = (uint)(iend - anchor);
+                        
+                        if (op + lastRun + 1 + ((lastRun + 255 - RUN_MASK) / 255) > olimit)
+                            return 0; // Not enough space
+
+                        if (lastRun >= RUN_MASK)
+                        {
+                            uint accumulator = lastRun - RUN_MASK;
+                            *op++ = (byte)(RUN_MASK << ML_BITS);
+                            while (accumulator >= 255)
+                            {
+                                *op++ = 255;
+                                accumulator -= 255;
+                            }
+                            *op++ = (byte)accumulator;
+                        }
+                        else
+                        {
+                            *op++ = (byte)(lastRun << ML_BITS);
+                        }
+
+                        Copy(op, anchor, (int)lastRun);
+                        op += lastRun;
+                    }
+
+                    return (int)(op - dest);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static int CompressSmallUnsafe(byte* source, byte* dest, int inputSize, int maxOutputSize)
+        {
+            if (maxOutputSize < inputSize + 1)
+                return 0;
+
+            dest[0] = (byte)(inputSize << ML_BITS);
+            Buffer.MemoryCopy(source, dest + 1, maxOutputSize - 1, inputSize);
+            return inputSize + 1;
         }
 
         /// <summary>
         /// Decompress LZ4 compressed data safely
         /// </summary>
-        /// <param name="source">Compressed source data</param>
-        /// <param name="destination">Destination buffer for decompressed data</param>
-        /// <param name="compressedSize">Size of compressed data</param>
-        /// <param name="maxDecompressedSize">Maximum size of decompressed data</param>
-        /// <returns>Size of decompressed data, or negative value on error</returns>
         public static int DecompressSafe(byte[] source, byte[] destination, int compressedSize, int maxDecompressedSize)
         {
             if (source == null || destination == null || compressedSize < 0 || maxDecompressedSize < 0)
                 return -1;
 
-            return DecompressGeneric(source, destination, compressedSize, maxDecompressedSize);
+            fixed (byte* srcPtr = source)
+            fixed (byte* dstPtr = destination)
+            {
+                return DecompressUnsafe(srcPtr, dstPtr, compressedSize, maxDecompressedSize);
+            }
         }
 
         /// <summary>
-        /// Phase 2 Optimization: Span-based decompression for zero-copy operations
-        /// Decompress LZ4 compressed data safely
+        /// Decompress LZ4 compressed data with Span interface
         /// </summary>
-        /// <param name="source">Compressed source data</param>
-        /// <param name="destination">Destination buffer for decompressed data</param>
-        /// <returns>Size of decompressed data, or negative value on error</returns>
         public static int DecompressSafe(ReadOnlySpan<byte> source, Span<byte> destination)
         {
-            if (source.Length < 0 || destination.Length < 0)
-                return -1;
-
-            return DecompressGenericSpan(source, destination);
+            fixed (byte* srcPtr = source)
+            fixed (byte* dstPtr = destination)
+            {
+                return DecompressUnsafe(srcPtr, dstPtr, source.Length, destination.Length);
+            }
         }
 
         /// <summary>
@@ -237,1255 +572,628 @@ namespace LZ4Sharp
             if (dstOffset + maxDecompressedSize > destination.Length)
                 return -1;
 
-            return DecompressGenericWithOffset(source, destination, compressedSize, maxDecompressedSize, dstOffset);
+            fixed (byte* srcPtr = source)
+            fixed (byte* dstPtr = &destination[dstOffset])
+            {
+                return DecompressUnsafe(srcPtr, dstPtr, compressedSize, maxDecompressedSize);
+            }
         }
 
-        private static int CompressGeneric(byte[] source, byte[] destination, int srcSize, int dstCapacity, int acceleration, LZ4Options options)
+        /// <summary>
+        /// Core unsafe decompression implementation
+        /// Optimized with lookup tables for small offset handling
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        private static int DecompressUnsafe(byte* source, byte* dest, int compressedSize, int outputSize)
         {
-            int srcPos = 0;
-            int dstPos = 0;
-            int anchor = 0;
+            byte* ip = source;
+            byte* iend = source + compressedSize;
 
-            int srcLimit = srcSize - MFLIMIT;
-            int dstEnd = dstCapacity;
+            byte* op = dest;
+            byte* oend = dest + outputSize;
+            byte* cpy;
+            byte* match;
+            uint offset;
 
-            if (srcSize < MINMATCH + 1)
+            // Shortcut pointers for fast path
+            byte* shortiend = iend - 14 - 2; // 14 = maxLL, 2 = offset
+            byte* shortoend = oend - 14 - 18; // 14 = maxLL, 18 = maxML
+
+            while (ip < iend)
             {
-                // Handle small input
-                return CompressSmall(source, destination, srcSize, dstCapacity);
-            }
+                // Get literal length
+                uint token = *ip++;
+                uint length = token >> ML_BITS;
 
-            // Note: Fast path for small inputs disabled for now to ensure correctness
-            // Can be re-enabled after more thorough testing
-
-            // Determine hash table size based on options
-            int hashLog = options.UseAdaptiveHashSizing ? GetAdaptiveHashLog(srcSize) : HASH_LOG;
-            int hashSize = 1 << hashLog;
-
-            // Phase 1 Optimization: Use ArrayPool for hash table to reduce GC pressure
-            // With adaptive sizing, this can significantly reduce memory footprint and improve cache hit rate
-            int[] hashTable = System.Buffers.ArrayPool<int>.Shared.Rent(hashSize);
-            try
-            {
-                hashTable.AsSpan(0, hashSize).Fill(-1);
-
-                srcPos++;
-
-                while (srcPos < srcLimit)
+                // Fast path shortcut for common case
+                if (length != RUN_MASK && ip < shortiend && op <= shortoend)
                 {
-                    int forwardPos = srcPos;
-                    int searchMatchNb = acceleration << 6;
+                    // Copy up to 16 literals at once using direct memory operations
+                    Poke8(op, Peek8(ip));
+                    Poke8(op + 8, Peek8(ip + 8));
+                    op += length;
+                    ip += length;
 
-                    // Find a match
-                    int matchPos = -1;
-                    
-                    // SIMD-accelerated match finding: process 4 positions at a time
-                    if (options.UseSIMDHashing && Sse2.IsSupported && forwardPos + 16 <= srcSize)
+                    // Get match info
+                    uint matchLen = token & ML_MASK;
+                    offset = Peek2(ip);
+                    ip += 2;
+                    match = op - offset;
+
+                    // Fast path: no overlap, common match length
+                    if (matchLen != ML_MASK && offset >= 8)
                     {
-                        // Try SIMD path first
-                        int positionsProcessed = ProcessPositions4_SIMD(
-                            source, hashTable, forwardPos, srcSize, srcLimit, 
-                            acceleration, ref searchMatchNb, out int simdMatchPos);
-                        
-                        if (simdMatchPos >= 0)
-                        {
-                            // Found a match at one of the 4 positions
-                            matchPos = simdMatchPos;
-                            forwardPos = forwardPos + positionsProcessed; // Adjust to position where match was found
-                        }
-                        else if (positionsProcessed == 4)
-                        {
-                            // All 4 positions processed, no match - advance
-                            forwardPos += 4;
-                            searchMatchNb += 4;
-                        }
-                        // If positionsProcessed < 4, fall through to scalar path
+                        // Copy 18 bytes inline for speed
+                        Poke8(op, Peek8(match));
+                        Poke8(op + 8, Peek8(match + 8));
+                        Poke2(op + 16, Peek2(match + 16));
+                        op += matchLen + MINMATCH;
+                        continue;
                     }
-                    
-                    // Continue with standard search if SIMD didn't find a match
-                    if (matchPos < 0)
+
+                    // Handle variable length match
+                    if (matchLen == ML_MASK)
                     {
+                        uint s;
                         do
                         {
-                            // Ensure we don't read past the end when calculating hash
-                            if (forwardPos + 4 > srcSize)
-                                break;
-                                
-                            int hash = options.UseAdaptiveHashSizing 
-                                ? HashPositionAdaptive(source, forwardPos, hashLog)
-                                : HashPosition(source, forwardPos);
-                            int candidate = hashTable[hash];
-                            hashTable[hash] = forwardPos;
+                            if (ip >= iend) return -1;
+                            s = *ip++;
+                            matchLen += s;
+                        } while (s == 255);
+                    }
+                    length = matchLen + MINMATCH;
 
-                            // Phase 1 Optimization: Avoid repeated condition by checking candidate validity first
-                            if (candidate >= 0 && forwardPos - candidate <= LZ4_DISTANCE_MAX)
+                    // Copy match
+                    cpy = op + length;
+                    if (cpy > oend)
+                        return -1;
+
+                    // Handle copy based on offset
+                    if (offset < 8)
+                    {
+                        // Small offset: use lookup table approach
+                        op[0] = match[0];
+                        op[1] = match[1];
+                        op[2] = match[2];
+                        op[3] = match[3];
+                        match += Inc32Table[offset];
+                        Poke4(op + 4, Peek4(match));
+                        match -= Dec64Table[offset];
+                        op += 8;
+
+                        // Continue with overlapping copy using 8-byte chunks
+                        while (op < cpy)
+                        {
+                            Poke8(op, Peek8(match));
+                            op += 8;
+                            match += 8;
+                        }
+                        op = cpy;
+                    }
+                    else
+                    {
+                        // Non-overlapping: copy 8 bytes at a time
+                        Poke8(op, Peek8(match));
+                        if (length > 8)
+                        {
+                            Poke8(op + 8, Peek8(match + 8));
+                            if (length > 16)
                             {
-                                if (AreEqual(source, candidate, forwardPos, MINMATCH))
+                                op += 16;
+                                match += 16;
+                                while (op < cpy)
                                 {
-                                    matchPos = candidate;
-                                    break;
+                                    Poke8(op, Peek8(match));
+                                    op += 8;
+                                    match += 8;
                                 }
                             }
-
-                            // Phase 1 Optimization: Combine step increment with forward position update
-                            forwardPos += (searchMatchNb++ >> 6);
-                        } while (forwardPos < srcLimit);
-                    }
-
-                    if (matchPos < 0)
-                    {
-                        // No match found, encode remaining as literals
-                        break;
-                    }
-
-                    // Encode literal length
-                    int litLength = forwardPos - anchor;
-                    int tokenPos = dstPos++;
-
-                    if (dstPos + litLength + 2 + 1 + LASTLITERALS > dstEnd)
-                        return 0; // Not enough space
-
-                    int token;
-                    if (litLength >= RUN_MASK)
-                    {
-                        token = RUN_MASK << ML_BITS;
-                        destination[tokenPos] = (byte)token;
-                        int len = litLength - RUN_MASK;
-                        // Phase 2 Optimization: Use optimized variable-length encoding
-                        dstPos = EncodeVariableLength(destination, dstPos, len);
-                    }
-                    else
-                    {
-                        token = litLength << ML_BITS;
-                        destination[tokenPos] = (byte)token;
-                    }
-
-                    // Copy literals
-                    WildCopy(source, destination, anchor, dstPos, litLength);
-                    dstPos += litLength;
-
-                    // Encode offset
-                    int offset = forwardPos - matchPos;
-                    destination[dstPos++] = (byte)offset;
-                    destination[dstPos++] = (byte)(offset >> 8);
-
-                    // Find match length
-                    int matchLength = MINMATCH + CountMatch(source, matchPos + MINMATCH, forwardPos + MINMATCH, srcSize);
-
-                    // Encode match length
-                    if (matchLength >= ML_MASK + MINMATCH)
-                    {
-                        destination[tokenPos] |= (byte)ML_MASK;
-                        int len = matchLength - (ML_MASK + MINMATCH);
-                        // Phase 2 Optimization: Use optimized variable-length encoding
-                        dstPos = EncodeVariableLength(destination, dstPos, len);
-                    }
-                    else
-                    {
-                        destination[tokenPos] |= (byte)(matchLength - MINMATCH);
-                    }
-
-                    // Move forward
-                    srcPos = forwardPos + matchLength;
-                    anchor = srcPos;
-
-                    // Update hash table for positions we skipped
-                    if (srcPos >= 2 && srcPos - 2 < srcLimit)
-                    {
-                        int hashPos = srcPos - 2;
-                        if (hashPos + 4 <= srcSize)
-                        {
-                            int skipHash = options.UseAdaptiveHashSizing 
-                                ? HashPositionAdaptive(source, hashPos, hashLog)
-                                : HashPosition(source, hashPos);
-                            hashTable[skipHash] = hashPos;
                         }
+                        op = cpy;
                     }
+                    continue;
                 }
 
-                // Encode last literals
-                int lastLiterals = srcSize - anchor;
-                if (dstPos + lastLiterals + 1 + ((lastLiterals >= RUN_MASK) ? ((lastLiterals - RUN_MASK) / 255 + 1) : 0) > dstEnd)
-                    return 0;
-
-                if (lastLiterals >= RUN_MASK)
+                // Decode literal length (slow path)
+                if (length == RUN_MASK)
                 {
-                    destination[dstPos++] = (byte)(RUN_MASK << ML_BITS);
-                    int len = lastLiterals - RUN_MASK;
-                    // Phase 2 Optimization: Use optimized variable-length encoding
-                    dstPos = EncodeVariableLength(destination, dstPos, len);
+                    uint s;
+                    do
+                    {
+                        if (ip >= iend) return -1;
+                        s = *ip++;
+                        length += s;
+                    } while (s == 255);
+                }
+
+                // Copy literals
+                cpy = op + length;
+                if (cpy > oend || ip + length > iend)
+                    return -1;
+
+                // Copy literals using SIMD - AVX-512 for large copies
+                if (length >= 64 && Avx512F.IsSupported)
+                {
+                    byte* copyEnd = cpy;
+                    while (op + 64 <= copyEnd)
+                    {
+                        Avx512F.Store(op, Avx512F.LoadVector512(ip));
+                        op += 64;
+                        ip += 64;
+                    }
+                    while (op + 32 <= copyEnd)
+                    {
+                        Avx.Store(op, Avx.LoadVector256(ip));
+                        op += 32;
+                        ip += 32;
+                    }
+                    while (op < copyEnd)
+                    {
+                        *op++ = *ip++;
+                    }
+                    op = copyEnd;
+                }
+                else if (length >= 16)
+                {
+                    byte* copyEnd = cpy;
+                    do
+                    {
+                        Poke8(op, Peek8(ip));
+                        Poke8(op + 8, Peek8(ip + 8));
+                        op += 16;
+                        ip += 16;
+                    } while (op < copyEnd - 15);
+                    
+                    // Handle remaining bytes
+                    while (op < copyEnd)
+                    {
+                        *op++ = *ip++;
+                    }
+                    op = copyEnd;
+                }
+                else if (length >= 8)
+                {
+                    Poke8(op, Peek8(ip));
+                    if (length > 8)
+                    {
+                        Poke8(op + 8, Peek8(ip + 8));
+                    }
+                    ip += length;
+                    op = cpy;
                 }
                 else
                 {
-                    destination[dstPos++] = (byte)(lastLiterals << ML_BITS);
+                    // Small literal copy
+                    Poke8(op, Peek8(ip));
+                    ip += length;
+                    op = cpy;
                 }
 
-                Buffer.BlockCopy(source, anchor, destination, dstPos, lastLiterals);
-                dstPos += lastLiterals;
+                if (ip >= iend)
+                    break;
 
-                return dstPos;
-            }
-            finally
-            {
-                // Phase 1 Optimization: Return hash table to pool
-                System.Buffers.ArrayPool<int>.Shared.Return(hashTable);
-            }
-        }
+                // Get offset
+                offset = Peek2(ip);
+                ip += 2;
 
-        private static int CompressSmall(byte[] source, byte[] destination, int srcSize, int dstCapacity)
-        {
-            if (dstCapacity < srcSize + 1)
-                return 0;
+                if (offset == 0 || offset > (uint)(op - dest))
+                    return -1;
 
-            destination[0] = (byte)(srcSize << ML_BITS);
-            Buffer.BlockCopy(source, 0, destination, 1, srcSize);
-            return srcSize + 1;
-        }
+                match = op - offset;
 
-        /// <summary>
-        /// Phase 1 Optimization: Fast path for small inputs (< 256 bytes)
-        /// Uses a smaller hash table and simpler logic for better performance on small data
-        /// </summary>
-        private static int CompressSmallOptimized(byte[] source, byte[] destination, int srcSize, int dstCapacity)
-        {
-            int srcPos = 0;
-            int dstPos = 0;
-            int anchor = 0;
-
-            int srcLimit = srcSize - MFLIMIT;
-            int dstEnd = dstCapacity;
-
-            // Use smaller hash table for small inputs (512 entries instead of 4096)
-            const int SMALL_HASH_LOG = 9;
-            const int SMALL_HASH_SIZE = 1 << SMALL_HASH_LOG;
-            
-            int[] hashTable = System.Buffers.ArrayPool<int>.Shared.Rent(SMALL_HASH_SIZE);
-            try
-            {
-                hashTable.AsSpan(0, SMALL_HASH_SIZE).Fill(-1);
-
-                srcPos++;
-
-                while (srcPos < srcLimit)
+                // Get match length
+                length = token & ML_MASK;
+                if (length == ML_MASK)
                 {
-                    int forwardPos = srcPos;
-                    int matchPos = -1;
-
-                    // More thorough search for small inputs to ensure good compression
-                    for (int attempts = 0; attempts < 16 && forwardPos < srcLimit; attempts++, forwardPos++)
+                    uint s;
+                    do
                     {
-                        if (forwardPos + 4 > srcSize) break;
-                        
-                        uint value = BitConverter.ToUInt32(source, forwardPos);
-                        int hash = (int)((value * 2654435761u) >> (32 - SMALL_HASH_LOG));
-                        int candidate = hashTable[hash];
-                        hashTable[hash] = forwardPos;
+                        if (ip >= iend) return -1;
+                        s = *ip++;
+                        length += s;
+                    } while (s == 255);
+                }
+                length += MINMATCH;
 
-                        if (candidate >= 0 && forwardPos - candidate <= LZ4_DISTANCE_MAX)
+                // Copy match
+                cpy = op + length;
+                if (cpy > oend)
+                    return -1;
+
+                // Handle copy based on offset
+                if (offset < 8)
+                {
+                    // Small offset: use lookup table approach
+                    op[0] = match[0];
+                    op[1] = match[1];
+                    op[2] = match[2];
+                    op[3] = match[3];
+                    match += Inc32Table[offset];
+                    Poke4(op + 4, Peek4(match));
+                    match -= Dec64Table[offset];
+                    op += 8;
+
+                    // Continue with overlapping copy
+                    while (op < cpy)
+                    {
+                        Poke8(op, Peek8(match));
+                        op += 8;
+                        match += 8;
+                    }
+                    op = cpy;
+                }
+                else
+                {
+                    // Non-overlapping copy: 8 bytes at a time
+                    Poke8(op, Peek8(match));
+                    if (length > 8)
+                    {
+                        Poke8(op + 8, Peek8(match + 8));
+                        if (length > 16)
                         {
-                            if (AreEqual(source, candidate, forwardPos, MINMATCH))
+                            op += 16;
+                            match += 16;
+                            while (op < cpy)
                             {
-                                matchPos = candidate;
-                                break;
+                                Poke8(op, Peek8(match));
+                                op += 8;
+                                match += 8;
                             }
                         }
                     }
-
-                    if (matchPos < 0)
-                    {
-                        break;
-                    }
-
-                    // Encode literal length
-                    int litLength = forwardPos - anchor;
-                    int tokenPos = dstPos++;
-
-                    if (dstPos + litLength + 2 + 1 + LASTLITERALS > dstEnd)
-                        return 0;
-
-                    int token;
-                    if (litLength >= RUN_MASK)
-                    {
-                        token = RUN_MASK << ML_BITS;
-                        destination[tokenPos] = (byte)token;
-                        int len = litLength - RUN_MASK;
-                        // Phase 2 Optimization: Use optimized variable-length encoding
-                        dstPos = EncodeVariableLength(destination, dstPos, len);
-                    }
-                    else
-                    {
-                        token = litLength << ML_BITS;
-                        destination[tokenPos] = (byte)token;
-                    }
-
-                    Buffer.BlockCopy(source, anchor, destination, dstPos, litLength);
-                    dstPos += litLength;
-
-                    int offset = forwardPos - matchPos;
-                    destination[dstPos++] = (byte)offset;
-                    destination[dstPos++] = (byte)(offset >> 8);
-
-                    int matchLength = MINMATCH + CountMatch(source, matchPos + MINMATCH, forwardPos + MINMATCH, srcSize);
-
-                    if (matchLength >= ML_MASK + MINMATCH)
-                    {
-                        destination[tokenPos] |= (byte)ML_MASK;
-                        int len = matchLength - (ML_MASK + MINMATCH);
-                        // Phase 2 Optimization: Use optimized variable-length encoding
-                        dstPos = EncodeVariableLength(destination, dstPos, len);
-                    }
-                    else
-                    {
-                        destination[tokenPos] |= (byte)(matchLength - MINMATCH);
-                    }
-
-                    srcPos = forwardPos + matchLength;
-                    anchor = srcPos;
+                    op = cpy;
                 }
-
-                // Encode last literals
-                int lastLiterals = srcSize - anchor;
-                if (dstPos + lastLiterals + 1 + ((lastLiterals >= RUN_MASK) ? ((lastLiterals - RUN_MASK) / 255 + 1) : 0) > dstEnd)
-                    return 0;
-
-                if (lastLiterals >= RUN_MASK)
-                {
-                    destination[dstPos++] = (byte)(RUN_MASK << ML_BITS);
-                    int len = lastLiterals - RUN_MASK;
-                    // Phase 2 Optimization: Use optimized variable-length encoding
-                    dstPos = EncodeVariableLength(destination, dstPos, len);
-                }
-                else
-                {
-                    destination[dstPos++] = (byte)(lastLiterals << ML_BITS);
-                }
-
-                Buffer.BlockCopy(source, anchor, destination, dstPos, lastLiterals);
-                dstPos += lastLiterals;
-
-                return dstPos;
             }
-            finally
-            {
-                System.Buffers.ArrayPool<int>.Shared.Return(hashTable);
-            }
+
+            return (int)(op - dest);
         }
 
-        private static int DecompressGeneric(byte[] source, byte[] destination, int srcSize, int dstSize)
-        {
-            int srcPos = 0;
-            int dstPos = 0;
+        #region Memory operations - pointer-based for maximum performance
 
-            while (srcPos < srcSize)
-            {
-                // Read token
-                int token = source[srcPos++];
-                int literalLength = token >> ML_BITS;
+        // Lookup tables for small offset copy optimization (from K4os)
+        private static readonly int[] Inc32Table = { 0, 1, 2, 1, 0, 4, 4, 4 };
+        private static readonly int[] Dec64Table = { 0, 0, 0, -1, -4, 1, 2, 3 };
 
-                // Decode literal length
-                if (literalLength == RUN_MASK)
-                {
-                    int len;
-                    do
-                    {
-                        if (srcPos >= srcSize) return -1;
-                        len = source[srcPos++];
-                        literalLength += len;
-                    } while (len == 255);
-                }
-
-                // Copy literals
-                if (dstPos + literalLength > dstSize || srcPos + literalLength > srcSize)
-                    return -1;
-
-                Buffer.BlockCopy(source, srcPos, destination, dstPos, literalLength);
-                srcPos += literalLength;
-                dstPos += literalLength;
-
-                if (srcPos >= srcSize)
-                    break; // End of input
-
-                // Read offset (use UInt16 for efficiency)
-                if (srcPos + 2 > srcSize)
-                    return -1;
-
-                int offset = BitConverter.ToUInt16(source, srcPos);
-                srcPos += 2;
-
-                if (offset == 0 || offset > dstPos)
-                    return -1;
-
-                int matchPos = dstPos - offset;
-
-                // Decode match length
-                int matchLength = (token & ML_MASK) + MINMATCH;
-
-                if ((token & ML_MASK) == ML_MASK)
-                {
-                    int len;
-                    do
-                    {
-                        if (srcPos >= srcSize) return -1;
-                        len = source[srcPos++];
-                        matchLength += len;
-                    } while (len == 255);
-                }
-
-                // Copy match
-                if (dstPos + matchLength > dstSize)
-                    return -1;
-
-                // Handle overlapping copy with optimized unrolled loop (25% faster based on micro-benchmarks)
-                CopyMatch(destination, matchPos, dstPos, matchLength);
-                dstPos += matchLength;
-            }
-
-            return dstPos;
-        }
-
-        private static int DecompressGenericWithOffset(byte[] source, byte[] destination, int srcSize, int dstSize, int dstOffset)
-        {
-            int srcPos = 0;
-            int dstPos = dstOffset;
-            int dstEnd = dstOffset + dstSize;
-
-            while (srcPos < srcSize)
-            {
-                // Read token
-                int token = source[srcPos++];
-                int literalLength = token >> ML_BITS;
-
-                // Decode literal length
-                if (literalLength == RUN_MASK)
-                {
-                    int len;
-                    do
-                    {
-                        if (srcPos >= srcSize) return -1;
-                        len = source[srcPos++];
-                        literalLength += len;
-                    } while (len == 255);
-                }
-
-                // Copy literals
-                if (dstPos + literalLength > dstEnd || srcPos + literalLength > srcSize)
-                    return -1;
-
-                Buffer.BlockCopy(source, srcPos, destination, dstPos, literalLength);
-                srcPos += literalLength;
-                dstPos += literalLength;
-
-                if (srcPos >= srcSize)
-                    break; // End of input
-
-                // Read offset (use UInt16 for efficiency)
-                if (srcPos + 2 > srcSize)
-                    return -1;
-
-                int offset = BitConverter.ToUInt16(source, srcPos);
-                srcPos += 2;
-
-                if (offset == 0 || offset > (dstPos - dstOffset))
-                    return -1;
-
-                int matchPos = dstPos - offset;
-
-                // Decode match length
-                int matchLength = (token & ML_MASK) + MINMATCH;
-
-                if ((token & ML_MASK) == ML_MASK)
-                {
-                    int len;
-                    do
-                    {
-                        if (srcPos >= srcSize) return -1;
-                        len = source[srcPos++];
-                        matchLength += len;
-                    } while (len == 255);
-                }
-
-                // Copy match
-                if (dstPos + matchLength > dstEnd)
-                    return -1;
-
-                // Handle overlapping copy with optimized unrolled loop (25% faster based on micro-benchmarks)
-                CopyMatch(destination, matchPos, dstPos, matchLength);
-                dstPos += matchLength;
-            }
-
-            return dstPos - dstOffset;
-        }
-
+        /// <summary>
+        /// 4-byte hash function (for small inputs &lt; 64KB)
+        /// Uses CRC32 when available for better distribution and speed
+        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static int HashPosition(byte[] source, int pos)
+        private static uint Hash4(byte* p)
         {
-            if (pos + 4 > source.Length)
-                return 0;
-            uint value = BitConverter.ToUInt32(source, pos);
-            return (int)((value * 2654435761u) >> (32 - HASH_LOG));
+            uint v = Peek4(p);
+            if (Sse42.IsSupported)
+            {
+                // CRC32 provides excellent hash distribution and is very fast on modern CPUs
+                return Sse42.Crc32(0, v) >> (32 - HASH_LOG);
+            }
+            return (v * HASH_MULT_4) >> (32 - HASH_LOG);
         }
 
         /// <summary>
-        /// Compute hash position with adaptive hash table sizing
+        /// 5-byte hash function (for larger inputs >= 64KB) - provides better distribution
+        /// Same algorithm as K4os/original LZ4
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static int HashPositionAdaptive(byte[] source, int pos, int hashLog)
+        private static uint Hash5(byte* p)
         {
-            if (pos + 4 > source.Length)
-                return 0;
-            uint value = BitConverter.ToUInt32(source, pos);
-            return (int)((value * 2654435761u) >> (32 - hashLog));
+            ulong sequence = Peek8(p);
+            return (uint)(unchecked((sequence << 24) * HASH_MULT_5) >> (64 - HASH_LOG));
         }
 
         /// <summary>
-        /// Determine optimal hash table size based on input data size
-        /// Smaller hash tables fit better in L1 cache (32KB typical)
+        /// 5-byte hash function with larger hash log for better match finding on large inputs
+        /// Uses CRC32 when available for better distribution and speed
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static int GetAdaptiveHashLog(int srcSize)
+        private static uint Hash5Large(byte* p)
         {
-            // Hash table size recommendations based on cache optimization:
-            // - 512 entries (2KB) fits entirely in L1 cache with room for other data
-            // - 1024 entries (4KB) still fits in L1 cache
-            // - 4096 entries (16KB) approaches L1 cache limit
-            
-            if (srcSize <= 4 * 1024)        // <= 4KB: use 512 entries (2KB table)
-                return 9;
-            if (srcSize <= 16 * 1024)       // <= 16KB: use 1024 entries (4KB table)
-                return 10;
-            if (srcSize <= 64 * 1024)       // <= 64KB: use 2048 entries (8KB table)
-                return 11;
-            
-            return 12;                      // > 64KB: use 4096 entries (16KB table)
-        }
-
-        /// <summary>
-        /// SIMD-based parallel hash computation for 4 consecutive positions
-        /// Used when UseSIMDHashing option is enabled
-        /// Provides 15-25% speedup on SSE2-capable systems
-        /// </summary>
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void HashPosition4_SIMD(byte[] source, int pos, out int h0, out int h1, out int h2, out int h3)
-        {
-            // Check if we can use SIMD and have enough data
-            if (Sse2.IsSupported && pos + 16 <= source.Length)
+            ulong sequence = Peek8(p);
+            if (Sse42.X64.IsSupported)
             {
-                // Load 16 bytes containing 4 overlapping 4-byte sequences
-                // [pos+0, pos+1, pos+2, pos+3] -> 4 UInt32 values with 1-byte stride
-                uint v0 = BitConverter.ToUInt32(source, pos);
-                uint v1 = BitConverter.ToUInt32(source, pos + 1);
-                uint v2 = BitConverter.ToUInt32(source, pos + 2);
-                uint v3 = BitConverter.ToUInt32(source, pos + 3);
-                
-                // Create SIMD vector with 4 values
-                Vector128<uint> values = Vector128.Create(v0, v1, v2, v3);
-                
-                // Multiply by hash constant (2654435761u)
-                Vector128<uint> hashConst = Vector128.Create(2654435761u);
-                
-                // Perform multiplication (note: SSE doesn't have direct 32-bit multiply)
-                // We'll do scalar multiplication for now, but on AVX2 this could be optimized
-                uint m0 = v0 * 2654435761u;
-                uint m1 = v1 * 2654435761u;
-                uint m2 = v2 * 2654435761u;
-                uint m3 = v3 * 2654435761u;
-                
-                // Right shift by (32 - HASH_LOG) = 20
-                h0 = (int)(m0 >> 20);
-                h1 = (int)(m1 >> 20);
-                h2 = (int)(m2 >> 20);
-                h3 = (int)(m3 >> 20);
+                // CRC32 on 64-bit value for excellent distribution
+                return (uint)(Sse42.X64.Crc32(0, sequence) >> (32 - HASH_LOG_LARGE));
             }
-            else
-            {
-                // Fallback to scalar implementation
-                h0 = HashPosition(source, pos);
-                h1 = HashPosition(source, pos + 1);
-                h2 = HashPosition(source, pos + 2);
-                h3 = HashPosition(source, pos + 3);
-            }
+            return (uint)(unchecked((sequence << 24) * HASH_MULT_5) >> (64 - HASH_LOG_LARGE));
         }
 
         /// <summary>
-        /// Process 4 positions in parallel using SIMD hash computation
-        /// Returns number of positions successfully processed
+        /// Hash position using appropriate function based on input size
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static int ProcessPositions4_SIMD(
-            byte[] source, 
-            int[] hashTable, 
-            int startPos, 
-            int srcSize,
-            int srcLimit,
-            int acceleration,
-            ref int searchMatchNb,
-            out int matchPos)
+        private static uint HashPosition(byte* p, bool useLargeHash)
         {
-            matchPos = -1;
-            
-            if (startPos + 16 > srcSize)
-                return 0; // Not enough data for SIMD
-            
-            // Compute 4 hashes in parallel
-            HashPosition4_SIMD(source, startPos, out int h0, out int h1, out int h2, out int h3);
-            
-            // Check all 4 candidates
-            int[] candidates = { hashTable[h0], hashTable[h1], hashTable[h2], hashTable[h3] };
-            int[] positions = { startPos, startPos + 1, startPos + 2, startPos + 3 };
-            
-            // Update hash table for all 4 positions
-            hashTable[h0] = startPos;
-            hashTable[h1] = startPos + 1;
-            hashTable[h2] = startPos + 2;
-            hashTable[h3] = startPos + 3;
-            
-            // Check for matches at each position
-            for (int i = 0; i < 4; i++)
+            return useLargeHash ? Hash5(p) : Hash4(p);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void PutPosition(byte* p, uint* hashTable, byte* srcBase, bool useLargeHash)
+        {
+            uint h = HashPosition(p, useLargeHash);
+            hashTable[h] = (uint)(p - srcBase);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void PutPositionOnHash(byte* p, uint h, uint* hashTable, byte* srcBase)
+        {
+            hashTable[h] = (uint)(p - srcBase);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static byte* GetPositionOnHash(uint h, uint* hashTable, byte* srcBase)
+        {
+            return srcBase + hashTable[h];
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static uint LZ4_count(byte* pIn, byte* pMatch, byte* pInLimit)
+        {
+            byte* pStart = pIn;
+
+            // Use AVX-512 for 64-byte comparisons when available (fastest path)
+            if (Avx512BW.IsSupported)
             {
-                int pos = positions[i];
-                int candidate = candidates[i];
-                
-                if (candidate >= 0 && pos - candidate <= LZ4_DISTANCE_MAX)
+                while (pIn + 64 <= pInLimit)
                 {
-                    if (AreEqual(source, candidate, pos, MINMATCH))
+                    var a = Avx512F.LoadVector512(pIn);
+                    var b = Avx512F.LoadVector512(pMatch);
+                    ulong mask = Avx512BW.CompareEqual(a, b).ExtractMostSignificantBits();
+                    if (mask != 0xFFFFFFFFFFFFFFFF)
                     {
-                        matchPos = candidate;
-                        return i; // Return which position found the match
+                        // Find first difference
+                        ulong diff = ~mask;
+                        int pos = System.Numerics.BitOperations.TrailingZeroCount(diff);
+                        return (uint)(pIn - pStart) + (uint)pos;
                     }
+                    pIn += 64;
+                    pMatch += 64;
                 }
-            }
-            
-            return 4; // All 4 positions processed, no match found
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool AreEqual(byte[] source, int pos1, int pos2, int length)
-        {
-            // Phase 4 SIMD Optimization: Use SIMD for longer comparisons
-            if (length == 32 && Avx2.IsSupported && pos1 + 32 <= source.Length && pos2 + 32 <= source.Length)
-            {
-                var vec1 = Vector256.LoadUnsafe(ref source[pos1]);
-                var vec2 = Vector256.LoadUnsafe(ref source[pos2]);
-                return vec1.Equals(vec2);
-            }
-            
-            if (length == 16 && Sse2.IsSupported && pos1 + 16 <= source.Length && pos2 + 16 <= source.Length)
-            {
-                var vec1 = Vector128.LoadUnsafe(ref source[pos1]);
-                var vec2 = Vector128.LoadUnsafe(ref source[pos2]);
-                return vec1.Equals(vec2);
-            }
-            
-            // Phase 1 Optimization: Add 64-bit comparison for 8-byte matches
-            // This provides 8-12% speedup for compression by reducing loop iterations
-            if (length == 8 && pos1 <= source.Length - 8 && pos2 <= source.Length - 8)
-            {
-                ulong val1 = BitConverter.ToUInt64(source, pos1);
-                ulong val2 = BitConverter.ToUInt64(source, pos2);
-                return val1 == val2;
-            }
-            
-            // Optimized: Use 32-bit comparison for MINMATCH (4 bytes) which is the most common case
-            // Note: Uses BitConverter which is endian-dependent but works correctly on little-endian systems (x86/x64)
-            if (length == 4 && pos1 <= source.Length - 4 && pos2 <= source.Length - 4)
-            {
-                uint val1 = BitConverter.ToUInt32(source, pos1);
-                uint val2 = BitConverter.ToUInt32(source, pos2);
-                return val1 == val2;
-            }
-            
-            // Fallback to byte-by-byte comparison for other lengths
-            for (int i = 0; i < length; i++)
-            {
-                if (source[pos1 + i] != source[pos2 + i])
-                    return false;
-            }
-            return true;
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static int CountMatch(byte[] source, int pos1, int pos2, int limit)
-        {
-            int count = 0;
-            
-            // Phase 4 SIMD Optimization: Use AVX2 for 32-byte comparisons when available
-            if (Avx2.IsSupported)
-            {
-                while (pos2 + 32 <= limit && pos1 + 32 <= source.Length && pos2 + 32 <= source.Length)
+                
+                // Handle remaining 32+ bytes with AVX-512 (256-bit mode)
+                if (pIn + 32 <= pInLimit)
                 {
-                    var vec1 = Vector256.LoadUnsafe(ref source[pos1]);
-                    var vec2 = Vector256.LoadUnsafe(ref source[pos2]);
-                    
-                    if (!vec1.Equals(vec2))
-                        break;
-                    
-                    pos1 += 32;
-                    pos2 += 32;
-                    count += 32;
+                    var a = Avx512F.LoadVector256(pIn);
+                    var b = Avx512F.LoadVector256(pMatch);
+                    uint mask = Avx512BW.CompareEqual(a, b).ExtractMostSignificantBits();
+                    if (mask != 0xFFFFFFFF)
+                    {
+                        uint diff = ~mask;
+                        int pos = System.Numerics.BitOperations.TrailingZeroCount(diff);
+                        return (uint)(pIn - pStart) + (uint)pos;
+                    }
+                    pIn += 32;
+                    pMatch += 32;
                 }
             }
-            // Fallback to SSE2 for 16-byte comparisons
+            // Use AVX2 for 32-byte comparisons when available
+            else if (Avx2.IsSupported)
+            {
+                while (pIn + 32 <= pInLimit)
+                {
+                    var a = Avx.LoadVector256(pIn);
+                    var b = Avx.LoadVector256(pMatch);
+                    var eq = Avx2.CompareEqual(a, b);
+                    uint mask = (uint)Avx2.MoveMask(eq);
+                    if (mask != 0xFFFFFFFF)
+                    {
+                        // Find first difference
+                        uint diff = ~mask;
+                        int pos = System.Numerics.BitOperations.TrailingZeroCount(diff);
+                        return (uint)(pIn - pStart) + (uint)pos;
+                    }
+                    pIn += 32;
+                    pMatch += 32;
+                }
+            }
+            // Use SSE2 for 16-byte comparisons when AVX2 not available
             else if (Sse2.IsSupported)
             {
-                while (pos2 + 16 <= limit && pos1 + 16 <= source.Length && pos2 + 16 <= source.Length)
+                while (pIn + 16 <= pInLimit)
                 {
-                    var vec1 = Vector128.LoadUnsafe(ref source[pos1]);
-                    var vec2 = Vector128.LoadUnsafe(ref source[pos2]);
-                    
-                    if (!vec1.Equals(vec2))
-                        break;
-                    
-                    pos1 += 16;
-                    pos2 += 16;
-                    count += 16;
-                }
-            }
-            
-            // Phase 1 Optimization: Compare 8 bytes at a time when possible (UInt64)
-            // This provides 3-5% additional speedup, especially for long matches
-            while (pos2 + 8 <= limit && pos1 <= source.Length - 8 && pos2 <= source.Length - 8)
-            {
-                ulong val1 = BitConverter.ToUInt64(source, pos1);
-                ulong val2 = BitConverter.ToUInt64(source, pos2);
-                if (val1 != val2)
-                    break;
-                pos1 += 8;
-                pos2 += 8;
-                count += 8;
-            }
-            
-            // Optimized: Compare 4 bytes at a time for remainder
-            // Note: Uses BitConverter which is endian-dependent but works correctly on little-endian systems (x86/x64)
-            while (pos2 + 4 <= limit && pos1 <= source.Length - 4 && pos2 <= source.Length - 4)
-            {
-                uint val1 = BitConverter.ToUInt32(source, pos1);
-                uint val2 = BitConverter.ToUInt32(source, pos2);
-                if (val1 != val2)
-                    break;
-                pos1 += 4;
-                pos2 += 4;
-                count += 4;
-            }
-            
-            // Handle remaining bytes
-            while (pos2 < limit && pos1 < source.Length && source[pos1] == source[pos2])
-            {
-                pos1++;
-                pos2++;
-                count++;
-            }
-            return count;
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void WildCopy(byte[] source, byte[] destination, int srcPos, int dstPos, int length)
-        {
-            // Use Buffer.BlockCopy for better performance (18% faster than Array.Copy based on micro-benchmarks)
-            Buffer.BlockCopy(source, srcPos, destination, dstPos, length);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void CopyMatch(byte[] destination, int srcPos, int dstPos, int length)
-        {
-            // Phase 2 Optimization: SIMD-enhanced overlapping copy
-            // This handles the case where source and destination overlap
-            int remaining = length;
-            int offset = dstPos - srcPos;
-            
-            // Phase 2: For short overlaps (offset < 16), use pattern replication
-            // This is faster than byte-by-byte copy for small repeating patterns
-            if (offset < 16 && offset > 0)
-            {
-                // Replicate the pattern to fill the destination
-                // This is especially efficient for RLE-like patterns common in logs
-                while (remaining >= offset)
-                {
-                    for (int i = 0; i < offset; i++)
+                    var a = Sse2.LoadVector128(pIn);
+                    var b = Sse2.LoadVector128(pMatch);
+                    var eq = Sse2.CompareEqual(a, b);
+                    int mask = Sse2.MoveMask(eq);
+                    if (mask != 0xFFFF)
                     {
-                        destination[dstPos + i] = destination[srcPos + i];
+                        // Find first difference
+                        int diff = ~mask & 0xFFFF;
+                        int pos = System.Numerics.BitOperations.TrailingZeroCount(diff);
+                        return (uint)(pIn - pStart) + (uint)pos;
                     }
-                    dstPos += offset;
-                    remaining -= offset;
+                    pIn += 16;
+                    pMatch += 16;
                 }
-                // Handle any remaining bytes
-                for (int i = 0; i < remaining; i++)
+            }
+
+            // Fast path: compare 8 bytes at a time using XOR
+            while (pIn + 8 <= pInLimit)
+            {
+                ulong diff = Peek8(pIn) ^ Peek8(pMatch);
+                if (diff != 0)
                 {
-                    destination[dstPos + i] = destination[srcPos + i];
+                    return (uint)(pIn - pStart) + (uint)(System.Numerics.BitOperations.TrailingZeroCount(diff) >> 3);
                 }
+                pIn += 8;
+                pMatch += 8;
+            }
+
+            // Remaining bytes
+            while (pIn < pInLimit && *pIn == *pMatch)
+            {
+                pIn++;
+                pMatch++;
+            }
+
+            return (uint)(pIn - pStart);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static ushort Peek2(byte* p) => *(ushort*)p;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void Poke2(byte* p, ushort v) => *(ushort*)p = v;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static uint Peek4(byte* p) => *(uint*)p;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void Poke4(byte* p, uint v) => *(uint*)p = v;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static ulong Peek8(byte* p) => *(ulong*)p;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void Poke8(byte* p, ulong v) => *(ulong*)p = v;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void Copy2(byte* dst, byte* src)
+        {
+            *(ushort*)dst = *(ushort*)src;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void Copy4(byte* dst, byte* src)
+        {
+            *(uint*)dst = *(uint*)src;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void Copy8(byte* dst, byte* src)
+        {
+            *(ulong*)dst = *(ulong*)src;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void Copy16(byte* dst, byte* src)
+        {
+            *(ulong*)dst = *(ulong*)src;
+            *(ulong*)(dst + 8) = *(ulong*)(src + 8);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void Copy18(byte* dst, byte* src)
+        {
+            Copy16(dst, src);
+            Copy2(dst + 16, src + 16);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void Copy(byte* dst, byte* src, int length)
+        {
+            Buffer.MemoryCopy(src, dst, length, length);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void WildCopy8(byte* dst, byte* src, byte* dstEnd)
+        {
+            long length = dstEnd - dst;
+            
+            // Optimization 3A: Inline unroll for common short literal lengths (0-31 bytes)
+            // JSON typically has many short literals between keys/values
+            if (length <= 8)
+            {
+                Copy8(dst, src);
+                return;
+            }
+            if (length <= 16)
+            {
+                Copy8(dst, src);
+                Copy8(dst + 8, src + 8);
+                return;
+            }
+            if (length <= 24)
+            {
+                Copy8(dst, src);
+                Copy8(dst + 8, src + 8);
+                Copy8(dst + 16, src + 16);
+                return;
+            }
+            if (length <= 32)
+            {
+                Copy8(dst, src);
+                Copy8(dst + 8, src + 8);
+                Copy8(dst + 16, src + 16);
+                Copy8(dst + 24, src + 24);
                 return;
             }
             
-            // Phase 2: Use AVX2 for non-overlapping long copies (offset >= 32)
-            if (Avx2.IsSupported && offset >= 32 && remaining >= 32)
+            // Use AVX-512 for 64-byte copies when available (fastest path)
+            if (Avx512F.IsSupported)
             {
-                while (remaining >= 32 && dstPos + 32 <= destination.Length && srcPos + 32 <= destination.Length)
+                while (dst + 64 <= dstEnd)
                 {
-                    var vec = Vector256.LoadUnsafe(ref destination[srcPos]);
-                    vec.StoreUnsafe(ref destination[dstPos]);
-                    srcPos += 32;
-                    dstPos += 32;
-                    remaining -= 32;
+                    Avx512F.Store(dst, Avx512F.LoadVector512(src));
+                    dst += 64;
+                    src += 64;
+                }
+                // Handle remaining 32+ bytes
+                if (dst + 32 <= dstEnd)
+                {
+                    Avx.Store(dst, Avx.LoadVector256(src));
+                    dst += 32;
+                    src += 32;
+                }
+            }
+            // Use AVX2 for 32-byte copies when available
+            else if (Avx2.IsSupported)
+            {
+                while (dst + 32 <= dstEnd)
+                {
+                    Avx.Store(dst, Avx.LoadVector256(src));
+                    dst += 32;
+                    src += 32;
                 }
             }
             // Fallback to SSE2 for 16-byte copies
-            else if (Sse2.IsSupported && offset >= 16 && remaining >= 16)
+            else if (Sse2.IsSupported)
             {
-                while (remaining >= 16 && dstPos + 16 <= destination.Length && srcPos + 16 <= destination.Length)
+                while (dst + 16 <= dstEnd)
                 {
-                    var vec = Vector128.LoadUnsafe(ref destination[srcPos]);
-                    vec.StoreUnsafe(ref destination[dstPos]);
-                    srcPos += 16;
-                    dstPos += 16;
-                    remaining -= 16;
+                    Sse2.Store(dst, Sse2.LoadVector128(src));
+                    dst += 16;
+                    src += 16;
                 }
             }
             
-            // If offset >= 8, we can safely copy 8 bytes at a time without overlap issues
-            if (offset >= 8)
+            // Handle remaining bytes with 8-byte copies
+            while (dst < dstEnd)
             {
-                while (remaining >= 8 && dstPos + 8 <= destination.Length && srcPos + 8 <= destination.Length)
-                {
-                    ulong value = BitConverter.ToUInt64(destination, srcPos);
-                    BitConverter.TryWriteBytes(new Span<byte>(destination, dstPos, 8), value);
-                    srcPos += 8;
-                    dstPos += 8;
-                    remaining -= 8;
-                }
-            }
-            
-            // Unroll by 4 bytes when possible
-            while (remaining >= 4)
-            {
-                destination[dstPos] = destination[srcPos];
-                destination[dstPos + 1] = destination[srcPos + 1];
-                destination[dstPos + 2] = destination[srcPos + 2];
-                destination[dstPos + 3] = destination[srcPos + 3];
-                srcPos += 4;
-                dstPos += 4;
-                remaining -= 4;
-            }
-            
-            // Handle remaining bytes
-            while (remaining > 0)
-            {
-                destination[dstPos++] = destination[srcPos++];
-                remaining--;
+                Copy8(dst, src);
+                dst += 8;
+                src += 8;
             }
         }
 
         /// <summary>
-        /// Phase 2 Optimization: Optimized variable-length encoding
-        /// Unrolls common cases to avoid loop overhead for typical length values
+        /// Copy match with overlap handling using lookup tables (K4os approach)
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static int EncodeVariableLength(byte[] destination, int dstPos, int len)
+        private static void CopyMatchWithOffset(byte* op, byte* match, byte* cpy, uint offset)
         {
-            // Phase 2: Unroll common cases for better performance
-            // Most lengths are < 510, so handle these specially
-            if (len < 255)
+            if (offset < 8)
             {
-                destination[dstPos++] = (byte)len;
-            }
-            else if (len < 510)
-            {
-                destination[dstPos++] = 255;
-                destination[dstPos++] = (byte)(len - 255);
-            }
-            else if (len < 765)
-            {
-                destination[dstPos++] = 255;
-                destination[dstPos++] = 255;
-                destination[dstPos++] = (byte)(len - 510);
+                // Small offset: use lookup table approach for overlapping copies
+                op[0] = match[0];
+                op[1] = match[1];
+                op[2] = match[2];
+                op[3] = match[3];
+                match += Inc32Table[offset];
+                Copy4(op + 4, match);
+                match -= Dec64Table[offset];
             }
             else
             {
-                // Fallback to loop for very long lengths (rare)
-                for (; len >= 255; len -= 255)
-                    destination[dstPos++] = 255;
-                destination[dstPos++] = (byte)len;
+                Copy8(op, match);
+                match += 8;
             }
-            return dstPos;
-        }
+            op += 8;
 
-        #region Phase 2: Span-based APIs and ArrayPool
-
-        /// <summary>
-        /// Phase 2 Optimization: Span-based compression implementation
-        /// </summary>
-        private static int CompressGenericSpan(ReadOnlySpan<byte> source, Span<byte> destination, int acceleration, LZ4Options options)
-        {
-            int srcSize = source.Length;
-            int dstCapacity = destination.Length;
-            int srcPos = 0;
-            int dstPos = 0;
-            int anchor = 0;
-
-            int srcLimit = srcSize - MFLIMIT;
-            int dstEnd = dstCapacity;
-
-            if (srcSize < MINMATCH + 1)
+            // WildCopy remaining
+            if (op < cpy)
             {
-                return CompressSmallSpan(source, destination);
-            }
-
-            // Phase 2 Optimization: Use ArrayPool to reduce GC pressure
-            int[] hashTable = System.Buffers.ArrayPool<int>.Shared.Rent(HASH_SIZE);
-            try
-            {
-                hashTable.AsSpan(0, HASH_SIZE).Fill(-1);
-
-                srcPos++;
-
-                while (srcPos < srcLimit)
-                {
-                    int forwardPos = srcPos;
-                    int step = 1;
-                    int searchMatchNb = acceleration << 6;
-
-                    int matchPos = -1;
-                    do
-                    {
-                        int hash = HashPositionSpan(source, forwardPos);
-                        int candidate = hashTable[hash];
-                        hashTable[hash] = forwardPos;
-
-                        if (candidate >= 0 && forwardPos - candidate <= LZ4_DISTANCE_MAX)
-                        {
-                            if (AreEqualSpan(source, candidate, forwardPos, MINMATCH))
-                            {
-                                matchPos = candidate;
-                                break;
-                            }
-                        }
-
-                        forwardPos += step;
-                        step = searchMatchNb++ >> 6;
-                    } while (forwardPos < srcLimit);
-
-                    if (matchPos < 0)
-                    {
-                        break;
-                    }
-
-                    int litLength = forwardPos - anchor;
-                    int tokenPos = dstPos++;
-
-                    if (dstPos + litLength + 2 + 1 + LASTLITERALS > dstEnd)
-                        return 0;
-
-                    int token;
-                    if (litLength >= RUN_MASK)
-                    {
-                        token = RUN_MASK << ML_BITS;
-                        destination[tokenPos] = (byte)token;
-                        int len = litLength - RUN_MASK;
-                        for (; len >= 255; len -= 255)
-                            destination[dstPos++] = 255;
-                        destination[dstPos++] = (byte)len;
-                    }
-                    else
-                    {
-                        token = litLength << ML_BITS;
-                        destination[tokenPos] = (byte)token;
-                    }
-
-                    source.Slice(anchor, litLength).CopyTo(destination.Slice(dstPos));
-                    dstPos += litLength;
-
-                    int offset = forwardPos - matchPos;
-                    destination[dstPos++] = (byte)offset;
-                    destination[dstPos++] = (byte)(offset >> 8);
-
-                    int matchLength = MINMATCH + CountMatchSpan(source, matchPos + MINMATCH, forwardPos + MINMATCH, srcSize);
-
-                    if (matchLength >= ML_MASK + MINMATCH)
-                    {
-                        destination[tokenPos] |= (byte)ML_MASK;
-                        int len = matchLength - (ML_MASK + MINMATCH);
-                        for (; len >= 255; len -= 255)
-                            destination[dstPos++] = 255;
-                        destination[dstPos++] = (byte)len;
-                    }
-                    else
-                    {
-                        destination[tokenPos] |= (byte)(matchLength - MINMATCH);
-                    }
-
-                    srcPos = forwardPos + matchLength;
-                    anchor = srcPos;
-
-                    if (srcPos < srcLimit)
-                    {
-                        hashTable[HashPositionSpan(source, srcPos - 2)] = srcPos - 2;
-                    }
-                }
-
-                int lastLiterals = srcSize - anchor;
-                if (dstPos + lastLiterals + 1 + ((lastLiterals >= RUN_MASK) ? ((lastLiterals - RUN_MASK) / 255 + 1) : 0) > dstEnd)
-                    return 0;
-
-                if (lastLiterals >= RUN_MASK)
-                {
-                    destination[dstPos++] = (byte)(RUN_MASK << ML_BITS);
-                    int len = lastLiterals - RUN_MASK;
-                    for (; len >= 255; len -= 255)
-                        destination[dstPos++] = 255;
-                    destination[dstPos++] = (byte)len;
-                }
-                else
-                {
-                    destination[dstPos++] = (byte)(lastLiterals << ML_BITS);
-                }
-
-                source.Slice(anchor, lastLiterals).CopyTo(destination.Slice(dstPos));
-                dstPos += lastLiterals;
-
-                return dstPos;
-            }
-            finally
-            {
-                // Phase 2 Optimization: Return rented array to pool
-                System.Buffers.ArrayPool<int>.Shared.Return(hashTable);
-            }
-        }
-
-        /// <summary>
-        /// Phase 2 Optimization: Span-based small buffer compression
-        /// </summary>
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static int CompressSmallSpan(ReadOnlySpan<byte> source, Span<byte> destination)
-        {
-            if (destination.Length < source.Length + 1)
-                return 0;
-
-            destination[0] = (byte)(source.Length << ML_BITS);
-            source.CopyTo(destination.Slice(1));
-            return source.Length + 1;
-        }
-
-        /// <summary>
-        /// Phase 2 Optimization: Span-based decompression implementation
-        /// </summary>
-        private static int DecompressGenericSpan(ReadOnlySpan<byte> source, Span<byte> destination)
-        {
-            int srcSize = source.Length;
-            int dstSize = destination.Length;
-            int srcPos = 0;
-            int dstPos = 0;
-
-            while (srcPos < srcSize)
-            {
-                int token = source[srcPos++];
-                int literalLength = token >> ML_BITS;
-
-                if (literalLength == RUN_MASK)
-                {
-                    int len;
-                    do
-                    {
-                        if (srcPos >= srcSize) return -1;
-                        len = source[srcPos++];
-                        literalLength += len;
-                    } while (len == 255);
-                }
-
-                if (dstPos + literalLength > dstSize || srcPos + literalLength > srcSize)
-                    return -1;
-
-                source.Slice(srcPos, literalLength).CopyTo(destination.Slice(dstPos));
-                srcPos += literalLength;
-                dstPos += literalLength;
-
-                if (srcPos >= srcSize)
-                    break;
-
-                if (srcPos + 2 > srcSize)
-                    return -1;
-
-                int offset = BitConverter.ToUInt16(source.Slice(srcPos, 2));
-                srcPos += 2;
-
-                if (offset == 0 || offset > dstPos)
-                    return -1;
-
-                int matchPos = dstPos - offset;
-                int matchLength = (token & ML_MASK) + MINMATCH;
-
-                if ((token & ML_MASK) == ML_MASK)
-                {
-                    int len;
-                    do
-                    {
-                        if (srcPos >= srcSize) return -1;
-                        len = source[srcPos++];
-                        matchLength += len;
-                    } while (len == 255);
-                }
-
-                if (dstPos + matchLength > dstSize)
-                    return -1;
-
-                CopyMatchSpan(destination, matchPos, dstPos, matchLength);
-                dstPos += matchLength;
-            }
-
-            return dstPos;
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static int HashPositionSpan(ReadOnlySpan<byte> source, int pos)
-        {
-            if (pos + 4 > source.Length)
-                return 0;
-            uint value = System.BitConverter.ToUInt32(source.Slice(pos, 4));
-            return (int)((value * 2654435761u) >> (32 - HASH_LOG));
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool AreEqualSpan(ReadOnlySpan<byte> source, int pos1, int pos2, int length)
-        {
-            // Phase 4 SIMD Optimization: Use SIMD for longer comparisons
-            if (length == 32 && Avx2.IsSupported && pos1 + 32 <= source.Length && pos2 + 32 <= source.Length)
-            {
-                var vec1 = Vector256.LoadUnsafe(ref MemoryMarshal.GetReference(source.Slice(pos1)));
-                var vec2 = Vector256.LoadUnsafe(ref MemoryMarshal.GetReference(source.Slice(pos2)));
-                return vec1.Equals(vec2);
-            }
-            
-            if (length == 16 && Sse2.IsSupported && pos1 + 16 <= source.Length && pos2 + 16 <= source.Length)
-            {
-                var vec1 = Vector128.LoadUnsafe(ref MemoryMarshal.GetReference(source.Slice(pos1)));
-                var vec2 = Vector128.LoadUnsafe(ref MemoryMarshal.GetReference(source.Slice(pos2)));
-                return vec1.Equals(vec2);
-            }
-            
-            if (length == 8 && pos1 <= source.Length - 8 && pos2 <= source.Length - 8)
-            {
-                ulong val1 = System.BitConverter.ToUInt64(source.Slice(pos1, 8));
-                ulong val2 = System.BitConverter.ToUInt64(source.Slice(pos2, 8));
-                return val1 == val2;
-            }
-            
-            if (length == 4 && pos1 <= source.Length - 4 && pos2 <= source.Length - 4)
-            {
-                uint val1 = System.BitConverter.ToUInt32(source.Slice(pos1, 4));
-                uint val2 = System.BitConverter.ToUInt32(source.Slice(pos2, 4));
-                return val1 == val2;
-            }
-            
-            for (int i = 0; i < length; i++)
-            {
-                if (pos1 + i >= source.Length || pos2 + i >= source.Length)
-                    return false;
-                if (source[pos1 + i] != source[pos2 + i])
-                    return false;
-            }
-            return true;
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static int CountMatchSpan(ReadOnlySpan<byte> source, int pos1, int pos2, int limit)
-        {
-            int count = 0;
-            
-            // Phase 4 SIMD Optimization: Use AVX2 for 32-byte comparisons when available
-            if (Avx2.IsSupported)
-            {
-                while (pos2 + 32 <= limit && pos1 + 32 <= source.Length && pos2 + 32 <= source.Length)
-                {
-                    var vec1 = Vector256.LoadUnsafe(ref MemoryMarshal.GetReference(source.Slice(pos1)));
-                    var vec2 = Vector256.LoadUnsafe(ref MemoryMarshal.GetReference(source.Slice(pos2)));
-                    
-                    if (!vec1.Equals(vec2))
-                        break;
-                    
-                    pos1 += 32;
-                    pos2 += 32;
-                    count += 32;
-                }
-            }
-            // Fallback to SSE2 for 16-byte comparisons
-            else if (Sse2.IsSupported)
-            {
-                while (pos2 + 16 <= limit && pos1 + 16 <= source.Length && pos2 + 16 <= source.Length)
-                {
-                    var vec1 = Vector128.LoadUnsafe(ref MemoryMarshal.GetReference(source.Slice(pos1)));
-                    var vec2 = Vector128.LoadUnsafe(ref MemoryMarshal.GetReference(source.Slice(pos2)));
-                    
-                    if (!vec1.Equals(vec2))
-                        break;
-                    
-                    pos1 += 16;
-                    pos2 += 16;
-                    count += 16;
-                }
-            }
-            
-            while (pos2 + 8 <= limit && pos1 <= source.Length - 8 && pos2 <= source.Length - 8)
-            {
-                ulong val1 = System.BitConverter.ToUInt64(source.Slice(pos1, 8));
-                ulong val2 = System.BitConverter.ToUInt64(source.Slice(pos2, 8));
-                if (val1 != val2)
-                    break;
-                pos1 += 8;
-                pos2 += 8;
-                count += 8;
-            }
-            
-            while (pos2 + 4 <= limit && pos1 <= source.Length - 4 && pos2 <= source.Length - 4)
-            {
-                uint val1 = System.BitConverter.ToUInt32(source.Slice(pos1, 4));
-                uint val2 = System.BitConverter.ToUInt32(source.Slice(pos2, 4));
-                if (val1 != val2)
-                    break;
-                pos1 += 4;
-                pos2 += 4;
-                count += 4;
-            }
-            
-            while (pos2 < limit && pos1 < source.Length && source[pos1] == source[pos2])
-            {
-                pos1++;
-                pos2++;
-                count++;
-            }
-            return count;
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void CopyMatchSpan(Span<byte> destination, int srcPos, int dstPos, int length)
-        {
-            int remaining = length;
-            int offset = dstPos - srcPos;
-            
-            // If offset >= 8, we can safely copy 8 bytes at a time without overlap issues
-            if (offset >= 8)
-            {
-                while (remaining >= 8 && dstPos + 8 <= destination.Length && srcPos + 8 <= destination.Length)
-                {
-                    ulong value = BitConverter.ToUInt64(destination.Slice(srcPos, 8));
-                    BitConverter.TryWriteBytes(destination.Slice(dstPos, 8), value);
-                    srcPos += 8;
-                    dstPos += 8;
-                    remaining -= 8;
-                }
-            }
-            
-            while (remaining >= 4)
-            {
-                destination[dstPos] = destination[srcPos];
-                destination[dstPos + 1] = destination[srcPos + 1];
-                destination[dstPos + 2] = destination[srcPos + 2];
-                destination[dstPos + 3] = destination[srcPos + 3];
-                srcPos += 4;
-                dstPos += 4;
-                remaining -= 4;
-            }
-            
-            while (remaining > 0)
-            {
-                destination[dstPos++] = destination[srcPos++];
-                remaining--;
+                WildCopy8(op, match, cpy);
             }
         }
 

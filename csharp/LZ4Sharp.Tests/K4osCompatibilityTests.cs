@@ -230,5 +230,172 @@ namespace LZ4Sharp.Tests
                 Assert.Equal(source, decompressed);
             }
         }
+
+        #region LZ4Sharp.Unsafe Cross-Compatibility Tests
+
+        [Fact]
+        public void LZ4SharpUnsafe_Compress_K4os_Decompress_SimpleString()
+        {
+            // Arrange
+            string text = "Hello, World! This is a test string for compatibility testing.";
+            byte[] source = Encoding.UTF8.GetBytes(text);
+
+            // Act - Compress with LZ4Sharp.Unsafe
+            byte[] compressed = new byte[LZ4Codec.CompressBound(source.Length)];
+            int compressedSize = LZ4Codec.CompressDefault(source, compressed, source.Length, compressed.Length);
+            Assert.True(compressedSize > 0, "LZ4Sharp.Unsafe compression should succeed");
+
+            // Act - Decompress with K4os
+            byte[] decompressed = new byte[source.Length];
+            int decompressedSize = K4os.Compression.LZ4.LZ4Codec.Decode(
+                compressed, 0, compressedSize,
+                decompressed, 0, source.Length);
+
+            // Assert
+            Assert.Equal(source.Length, decompressedSize);
+            Assert.Equal(source, decompressed);
+        }
+
+        [Fact]
+        public void LZ4SharpUnsafe_Compress_K4os_Decompress_LargeData()
+        {
+            // Arrange - Create large data with patterns
+            byte[] source = new byte[100000];
+            for (int i = 0; i < source.Length; i++)
+            {
+                source[i] = (byte)(i % 256);
+            }
+
+            // Act - Compress with LZ4Sharp.Unsafe
+            byte[] compressed = new byte[LZ4Codec.CompressBound(source.Length)];
+            int compressedSize = LZ4Codec.CompressDefault(source, compressed, source.Length, compressed.Length);
+            Assert.True(compressedSize > 0, "LZ4Sharp.Unsafe compression should succeed");
+
+            // Act - Decompress with K4os
+            byte[] decompressed = new byte[source.Length];
+            int decompressedSize = K4os.Compression.LZ4.LZ4Codec.Decode(
+                compressed, 0, compressedSize,
+                decompressed, 0, source.Length);
+
+            // Assert
+            Assert.Equal(source.Length, decompressedSize);
+            Assert.Equal(source, decompressed);
+        }
+
+        [Fact]
+        public void K4os_Compress_LZ4SharpUnsafe_Decompress_SimpleString()
+        {
+            // Arrange
+            string text = "Hello, World! This is a test string for compatibility testing.";
+            byte[] source = Encoding.UTF8.GetBytes(text);
+
+            // Act - Compress with K4os
+            byte[] compressed = new byte[K4os.Compression.LZ4.LZ4Codec.MaximumOutputSize(source.Length)];
+            int compressedSize = K4os.Compression.LZ4.LZ4Codec.Encode(
+                source, 0, source.Length,
+                compressed, 0, compressed.Length,
+                K4os.Compression.LZ4.LZ4Level.L00_FAST);
+            Assert.True(compressedSize > 0, "K4os compression should succeed");
+
+            // Act - Decompress with LZ4Sharp.Unsafe
+            byte[] decompressed = new byte[source.Length];
+            int decompressedSize = LZ4Codec.DecompressSafe(compressed, decompressed, compressedSize, source.Length);
+
+            // Assert
+            Assert.Equal(source.Length, decompressedSize);
+            Assert.Equal(source, decompressed);
+        }
+
+        [Fact]
+        public void K4os_Compress_LZ4SharpUnsafe_Decompress_LargeData()
+        {
+            // Arrange - Create large data with patterns
+            byte[] source = new byte[100000];
+            for (int i = 0; i < source.Length; i++)
+            {
+                source[i] = (byte)(i % 256);
+            }
+
+            // Act - Compress with K4os
+            byte[] compressed = new byte[K4os.Compression.LZ4.LZ4Codec.MaximumOutputSize(source.Length)];
+            int compressedSize = K4os.Compression.LZ4.LZ4Codec.Encode(
+                source, 0, source.Length,
+                compressed, 0, compressed.Length,
+                K4os.Compression.LZ4.LZ4Level.L00_FAST);
+            Assert.True(compressedSize > 0, "K4os compression should succeed");
+
+            // Act - Decompress with LZ4Sharp.Unsafe
+            byte[] decompressed = new byte[source.Length];
+            int decompressedSize = LZ4Codec.DecompressSafe(compressed, decompressed, compressedSize, source.Length);
+
+            // Assert
+            Assert.Equal(source.Length, decompressedSize);
+            Assert.Equal(source, decompressed);
+        }
+
+        [Fact]
+        public void LZ4SharpUnsafe_Compress_K4os_Decompress_MultipleDataSizes()
+        {
+            // Test various data sizes to ensure compatibility
+            int[] sizes = { 10, 50, 100, 500, 1000, 5000, 10000, 50000 };
+
+            foreach (int size in sizes)
+            {
+                // Arrange
+                byte[] source = new byte[size];
+                for (int i = 0; i < source.Length; i++)
+                {
+                    source[i] = (byte)((i * 7 + 13) % 256);
+                }
+
+                // Act - Compress with LZ4Sharp.Unsafe
+                byte[] compressed = new byte[LZ4Codec.CompressBound(source.Length)];
+                int compressedSize = LZ4Codec.CompressDefault(source, compressed, source.Length, compressed.Length);
+
+                // Act - Decompress with K4os
+                byte[] decompressed = new byte[source.Length];
+                int decompressedSize = K4os.Compression.LZ4.LZ4Codec.Decode(
+                    compressed, 0, compressedSize,
+                    decompressed, 0, source.Length);
+
+                // Assert
+                Assert.Equal(source.Length, decompressedSize);
+                Assert.Equal(source, decompressed);
+            }
+        }
+
+        [Fact]
+        public void K4os_Compress_LZ4SharpUnsafe_Decompress_MultipleDataSizes()
+        {
+            // Test various data sizes to ensure compatibility
+            int[] sizes = { 10, 50, 100, 500, 1000, 5000, 10000, 50000 };
+
+            foreach (int size in sizes)
+            {
+                // Arrange
+                byte[] source = new byte[size];
+                for (int i = 0; i < source.Length; i++)
+                {
+                    source[i] = (byte)((i * 7 + 13) % 256);
+                }
+
+                // Act - Compress with K4os
+                byte[] compressed = new byte[K4os.Compression.LZ4.LZ4Codec.MaximumOutputSize(source.Length)];
+                int compressedSize = K4os.Compression.LZ4.LZ4Codec.Encode(
+                    source, 0, source.Length,
+                    compressed, 0, compressed.Length,
+                    K4os.Compression.LZ4.LZ4Level.L00_FAST);
+
+                // Act - Decompress with LZ4Sharp.Unsafe
+                byte[] decompressed = new byte[source.Length];
+                int decompressedSize = LZ4Codec.DecompressSafe(compressed, decompressed, compressedSize, source.Length);
+
+                // Assert
+                Assert.Equal(source.Length, decompressedSize);
+                Assert.Equal(source, decompressed);
+            }
+        }
+
+        #endregion
     }
 }

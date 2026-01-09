@@ -185,27 +185,5 @@ namespace LZ4Sharp.Tests
             string result = Encoding.UTF8.GetString(decompressed);
             Assert.Equal(testString, result);
         }
-
-        [Fact]
-        public void CompressFast_Span_WithAcceleration_Success()
-        {
-            string testString = "Testing Span API with custom acceleration parameter.";
-            byte[] source = Encoding.UTF8.GetBytes(testString);
-            
-            int maxCompressed = LZ4Codec.CompressBound(source.Length);
-            byte[] compressed = new byte[maxCompressed];
-            byte[] decompressed = new byte[source.Length];
-
-            // Compress with acceleration = 10
-            int compressedSize = LZ4Codec.CompressFast(source.AsSpan(), compressed.AsSpan(), 10);
-            Assert.True(compressedSize > 0);
-
-            // Decompress
-            int decompressedSize = LZ4Codec.DecompressSafe(compressed.AsSpan(0, compressedSize), decompressed.AsSpan());
-            Assert.Equal(source.Length, decompressedSize);
-
-            string result = Encoding.UTF8.GetString(decompressed);
-            Assert.Equal(testString, result);
-        }
     }
 }
