@@ -2,12 +2,11 @@
 
 This project contains performance benchmarks comparing LZ4Sharp against popular LZ4 C# NuGet packages.
 
+> Note: Non-JSON benchmarks have been removed; this project now focuses on JSON payload benchmarks only.
+
 ## Available Benchmarks
 
-1. **Quick Benchmarks** - Fast sanity checks with common data patterns
-2. **Comprehensive Benchmarks** - Full test suite with multiple sizes and patterns  
-3. **Standard Corpus Benchmarks** - Industry-standard compression test suites (Calgary, Canterbury, JSON)
-4. **Log Compression Profiling** - Real-world log data patterns
+1. **JSON Benchmarks** - 10,000 unique JSON payloads; compares **LZ4Sharp (LZ4HC)** at levels 3/6/9/12 vs **K4os** at the same nominal level.
 
 ## Benchmark Results
 
@@ -79,44 +78,14 @@ K4os.LZ4 prioritizes:
 
 ## Running the Benchmarks
 
-### Quick Benchmarks (Fast)
 ```bash
 cd LZ4Sharp.Benchmarks
-dotnet run -c Release -- --filter "*QuickBenchmarks*"
+dotnet run -c Release -- --filter "*JsonBenchmarks*"
 ```
 
-### Full Benchmarks (Comprehensive)
-```bash
-cd LZ4Sharp.Benchmarks
-dotnet run -c Release -- --filter "*LZ4CompressionBenchmarks*"
-```
-
-### Standard Corpus Benchmarks (New!)
-```bash
-cd LZ4Sharp.Benchmarks
-dotnet run -c Release -- --filter "*CorpusBenchmarks*" --job dry
-```
-
-This benchmark tests with standard compression corpora:
-- **Calgary Corpus**: Industry-standard compression benchmark (bib, book1, paper1, progc, progl)
-- **Canterbury Corpus**: Modern compression test suite (alice29.txt, asyoulik.txt, lcet10.txt, plrabn12.txt)
-- **JSON Bench**: JSON data patterns for modern applications
-
-See [CORPUS_BENCHMARKS.md](CORPUS_BENCHMARKS.md) for detailed information about the corpus benchmarks.
-
-### Log Compression Profiling
-```bash
-cd LZ4Sharp.Benchmarks
-dotnet run -c Release -- --filter "*LogCompressionProfilingBenchmarks*" --job short
-```
-
-This benchmark tests realistic log data patterns:
-- **Structured Logs**: Timestamp, log level, component, message format
-- **Unstructured Logs**: Varied formats and content
-- **Mixed Logs**: 70% structured, 30% unstructured (realistic scenario)
-- **JSON Logs**: JSON-formatted log entries (modern applications)
-
-See [PERFORMANCE_ANALYSIS.md](../../PERFORMANCE_ANALYSIS.md) for detailed profiling results and optimization recommendations.
+Benchmark parameters:
+- `JsonType`: 1kb / 7kb / 16kb / 72kb
+- `CompressionLevel`: 3 / 6 / 9 / 12 (LZ4HC), matched vs K4os at the same nominal level
 
 ### Specific Benchmark
 ```bash

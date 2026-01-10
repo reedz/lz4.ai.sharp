@@ -30,7 +30,10 @@
  */
 
 using System;
+using System.Buffers.Binary;
+using System.Numerics;
 using System.Runtime.CompilerServices;
+using System.Runtime.Intrinsics.X86;
 
 namespace LZ4Sharp
 {
@@ -42,7 +45,15 @@ namespace LZ4Sharp
     /// </summary>
     public static class LZ4HC
     {
+        // Thread-local context to avoid per-call allocations
+        [ThreadStatic]
+        private static HCContext? t_context;
+
+        private static readonly bool s_isLittleEndian = BitConverter.IsLittleEndian;
+
         // Constants
+        private const bool PreferCrc32Hash = false;
+
         private const int MINMATCH = 4;
         private const int WILDCOPYLENGTH = 8;
         private const int LASTLITERALS = 5;
@@ -110,7 +121,7 @@ namespace LZ4Sharp
             if (compressionLevel < CLEVEL_MIN) compressionLevel = CLEVEL_MIN;
             if (compressionLevel > CLEVEL_MAX) compressionLevel = CLEVEL_MAX;
 
-            var ctx = new HCContext();
+            var ctx = t_context ??= new HCContext();
             return CompressHCInternal(ctx, source, destination, sourceSize, maxDestinationSize, compressionLevel);
         }
 
@@ -122,10 +133,30 @@ namespace LZ4Sharp
             return LZ4Codec.CompressBound(inputSize);
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void WriteLen255(byte[] destination, ref int dstPos, int len)
+        {
+            while (len >= 4 * 255)
+            {
+                Unsafe.WriteUnaligned(ref destination[dstPos], 0xFFFFFFFFu);
+                dstPos += 4;
+                len -= 4 * 255;
+            }
+            while (len >= 255)
+            {
+                destination[dstPos++] = 255;
+                len -= 255;
+            }
+            destination[dstPos++] = (byte)len;
+        }
+
         // Internal context for HC compression
         private class HCContext
         {
             public uint[] HashTable = new uint[LZ4HC_HASHTABLESIZE];
+            public ushort[] HashTags = new ushort[LZ4HC_HASHTABLESIZE];
+            public ushort CurrentTag;
+
             public ushort[] ChainTable = new ushort[LZ4HC_MAXD];
             public uint NextToUpdate;
         }
@@ -140,86 +171,94 @@ namespace LZ4Sharp
             int srcLimit = sourceSize - MFLIMIT;
             int dstEnd = maxDestinationSize;
 
-            if (sourceSize > LZ4Codec.CompressBound(sourceSize))
-                return 0;
-
-            // Initialize hash table
-            Array.Clear(ctx.HashTable, 0, ctx.HashTable.Length);
-            Array.Clear(ctx.ChainTable, 0, ctx.ChainTable.Length);
+            // Reset state (avoid full table clears)
+            ctx.CurrentTag++;
+            if (ctx.CurrentTag == 0)
+            {
+                Array.Clear(ctx.HashTags, 0, ctx.HashTags.Length);
+                ctx.CurrentTag = 1;
+            }
             ctx.NextToUpdate = 0;
 
             srcPos++;
 
-            // Main loop
-            while (srcPos < srcLimit)
+            unsafe
             {
-                // Find match
-                var match = FindBestMatch(ctx, source, srcPos, srcEnd, cParams.NbSearches, srcPos - LZ4_DISTANCE_MAX);
-                
-                if (match.Length < MINMATCH)
+                fixed (byte* srcBase = source)
+                fixed (uint* hashTable = ctx.HashTable)
+                fixed (ushort* hashTags = ctx.HashTags)
+                fixed (ushort* chainTable = ctx.ChainTable)
                 {
-                    srcPos++;
-                    continue;
-                }
-
-                // Encode sequence
-                int litLength = srcPos - anchor;
-                int matchLength = match.Length;
-                int offset = srcPos - match.Position;
-
-                // Check output buffer space
-                int tokenPos = dstPos++;
-                if (dstPos + litLength / 255 + litLength + 2 + matchLength / 255 + LASTLITERALS > dstEnd)
-                    return 0;
-
-                // Encode literal length
-                if (litLength >= RUN_MASK)
-                {
-                    destination[tokenPos] = (byte)(RUN_MASK << ML_BITS);
-                    int len = litLength - RUN_MASK;
-                    while (len >= 255)
+                    // Main loop
+                    while (srcPos < srcLimit)
                     {
-                        destination[dstPos++] = 255;
-                        len -= 255;
+                        // Find match
+                        var match = FindBestMatch(ctx, srcBase, hashTable, hashTags, chainTable, srcPos, srcEnd, cParams.NbSearches, cParams.TargetLength, srcPos - LZ4_DISTANCE_MAX);
+
+                        if (match.Length < MINMATCH)
+                        {
+                            srcPos++;
+                            continue;
+                        }
+
+                        // Encode sequence
+                        int litLength = srcPos - anchor;
+                        int matchLength = match.Length;
+                        int offset = srcPos - match.Position;
+
+                        // Check output buffer space
+                        int tokenPos = dstPos++;
+                        if (dstPos + litLength / 255 + litLength + 2 + matchLength / 255 + LASTLITERALS > dstEnd)
+                            return 0;
+
+                        // Encode literal length
+                        if (litLength >= RUN_MASK)
+                        {
+                            destination[tokenPos] = (byte)(RUN_MASK << ML_BITS);
+                            WriteLen255(destination, ref dstPos, litLength - RUN_MASK);
+                        }
+                        else
+                        {
+                            destination[tokenPos] = (byte)(litLength << ML_BITS);
+                        }
+
+                        // Copy literals
+                        if (litLength != 0)
+                        {
+                            Unsafe.CopyBlockUnaligned(
+                                ref destination[dstPos],
+                                ref source[anchor],
+                                (uint)litLength);
+                            dstPos += litLength;
+                        }
+
+                        // Encode offset (little-endian)
+                        if (s_isLittleEndian)
+                            Unsafe.WriteUnaligned(ref destination[dstPos], (ushort)offset);
+                        else
+                        {
+                            destination[dstPos] = (byte)offset;
+                            destination[dstPos + 1] = (byte)(offset >> 8);
+                        }
+                        dstPos += 2;
+
+                        // Encode match length
+                        int mlCode = matchLength - MINMATCH;
+                        if (mlCode >= ML_MASK)
+                        {
+                            destination[tokenPos] += ML_MASK;
+                            WriteLen255(destination, ref dstPos, mlCode - ML_MASK);
+                        }
+                        else
+                        {
+                            destination[tokenPos] += (byte)mlCode;
+                        }
+
+                        // Move forward
+                        srcPos += matchLength;
+                        anchor = srcPos;
                     }
-                    destination[dstPos++] = (byte)len;
                 }
-                else
-                {
-                    destination[tokenPos] = (byte)(litLength << ML_BITS);
-                }
-
-                // Copy literals
-                for (int i = 0; i < litLength; i++)
-                {
-                    destination[dstPos++] = source[anchor + i];
-                }
-
-                // Encode offset (little-endian)
-                destination[dstPos++] = (byte)offset;
-                destination[dstPos++] = (byte)(offset >> 8);
-
-                // Encode match length
-                int mlCode = matchLength - MINMATCH;
-                if (mlCode >= ML_MASK)
-                {
-                    destination[tokenPos] += ML_MASK;
-                    mlCode -= ML_MASK;
-                    while (mlCode >= 255)
-                    {
-                        destination[dstPos++] = 255;
-                        mlCode -= 255;
-                    }
-                    destination[dstPos++] = (byte)mlCode;
-                }
-                else
-                {
-                    destination[tokenPos] += (byte)mlCode;
-                }
-
-                // Move forward
-                srcPos += matchLength;
-                anchor = srcPos;
             }
 
             // Encode last literals
@@ -230,13 +269,7 @@ namespace LZ4Sharp
             if (lastLiterals >= RUN_MASK)
             {
                 destination[dstPos++] = (byte)(RUN_MASK << ML_BITS);
-                int len = lastLiterals - RUN_MASK;
-                while (len >= 255)
-                {
-                    destination[dstPos++] = 255;
-                    len -= 255;
-                }
-                destination[dstPos++] = (byte)len;
+                WriteLen255(destination, ref dstPos, lastLiterals - RUN_MASK);
             }
             else
             {
@@ -244,9 +277,13 @@ namespace LZ4Sharp
             }
 
             // Copy last literals
-            for (int i = 0; i < lastLiterals; i++)
+            if (lastLiterals != 0)
             {
-                destination[dstPos++] = source[anchor + i];
+                Unsafe.CopyBlockUnaligned(
+                    ref destination[dstPos],
+                    ref source[anchor],
+                    (uint)lastLiterals);
+                dstPos += lastLiterals;
             }
 
             return dstPos;
@@ -265,73 +302,169 @@ namespace LZ4Sharp
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static uint HashPointer(byte[] data, int pos)
+        private static unsafe uint HashPointer(byte* p)
         {
-            uint value = (uint)(data[pos] | (data[pos + 1] << 8) | (data[pos + 2] << 16) | (data[pos + 3] << 24));
-            return (value * 2654435761U) >> (32 - LZ4HC_HASH_LOG);
+            uint v = Unsafe.ReadUnaligned<uint>(p);
+
+            if (PreferCrc32Hash && Sse42.IsSupported)
+                return Sse42.Crc32(0u, v) >> (32 - LZ4HC_HASH_LOG);
+
+            return (v * 2654435761u) >> (32 - LZ4HC_HASH_LOG);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static int CountCommonBytes(byte[] src1, int pos1, byte[] src2, int pos2, int maxCount)
+        private static unsafe int CountCommonBytes(byte* p1, byte* p2, byte* end)
         {
-            int count = 0;
-            while (count < maxCount && src1[pos1 + count] == src2[pos2 + count])
+            byte* start = p1;
+            if (p1 >= end) return 0;
+
+            while (p1 + sizeof(ulong) <= end)
             {
-                count++;
+                ulong diff = Unsafe.ReadUnaligned<ulong>(p1) ^ Unsafe.ReadUnaligned<ulong>(p2);
+                if (diff == 0)
+                {
+                    p1 += sizeof(ulong);
+                    p2 += sizeof(ulong);
+                    continue;
+                }
+
+                return (int)(p1 - start) + (BitOperations.TrailingZeroCount(diff) >> 3);
             }
-            return count;
+
+            while (p1 + sizeof(uint) <= end)
+            {
+                uint diff = Unsafe.ReadUnaligned<uint>(p1) ^ Unsafe.ReadUnaligned<uint>(p2);
+                if (diff == 0)
+                {
+                    p1 += sizeof(uint);
+                    p2 += sizeof(uint);
+                    continue;
+                }
+
+                return (int)(p1 - start) + (BitOperations.TrailingZeroCount(diff) >> 3);
+            }
+
+            while (p1 < end && *p1 == *p2)
+            {
+                p1++;
+                p2++;
+            }
+
+            return (int)(p1 - start);
         }
 
-        private static void InsertAndUpdate(HCContext ctx, byte[] source, int position, int target)
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static unsafe void InsertAndUpdate(
+            HCContext ctx,
+            byte* srcBase,
+            uint* hashTable,
+            ushort* hashTags,
+            ushort* chainTable,
+            uint target)
         {
-            while (ctx.NextToUpdate < target)
+            const uint chainMask = LZ4HC_MAXD - 1;
+            ushort currentTag = ctx.CurrentTag;
+
+            uint next = ctx.NextToUpdate;
+            while (next < target)
             {
-                uint h = HashPointer(source, (int)ctx.NextToUpdate);
-                int delta = (int)(ctx.NextToUpdate - ctx.HashTable[h]);
+                uint h = HashPointer(srcBase + next);
+                int hi = (int)h;
+
+                uint prev = hashTags[hi] == currentTag ? hashTable[hi] : 0;
+                int delta = (int)(next - prev);
                 if (delta > LZ4_DISTANCE_MAX) delta = LZ4_DISTANCE_MAX;
-                ctx.ChainTable[ctx.NextToUpdate & (LZ4HC_MAXD - 1)] = (ushort)delta;
-                ctx.HashTable[h] = ctx.NextToUpdate;
-                ctx.NextToUpdate++;
+
+                chainTable[next & chainMask] = (ushort)delta;
+                hashTable[hi] = next;
+                hashTags[hi] = currentTag;
+
+                next++;
             }
+
+            ctx.NextToUpdate = next;
         }
 
-        private static MatchInfo FindBestMatch(HCContext ctx, byte[] source, int srcPos, int srcEnd, int maxAttempts, int lowestMatchPos)
+        private static unsafe MatchInfo FindBestMatch(
+            HCContext ctx,
+            byte* srcBase,
+            uint* hashTable,
+            ushort* hashTags,
+            ushort* chainTable,
+            int srcPos,
+            int srcEnd,
+            int maxAttempts,
+            int targetLength,
+            int lowestMatchPos)
         {
             if (lowestMatchPos < 0) lowestMatchPos = 0;
 
-            InsertAndUpdate(ctx, source, srcPos, srcPos);
+            const uint chainMask = LZ4HC_MAXD - 1;
 
-            uint h = HashPointer(source, srcPos);
-            uint matchPos = ctx.HashTable[h];
-            
             int bestLength = 0;
             int bestPosition = 0;
             int attempts = maxAttempts;
 
-            while (matchPos >= lowestMatchPos && attempts-- > 0)
-            {
-                if (srcPos - matchPos > LZ4_DISTANCE_MAX)
-                    break;
+            // Update tables up to current position
+            InsertAndUpdate(ctx, srcBase, hashTable, hashTags, chainTable, (uint)srcPos);
 
-                // Check if first 4 bytes match
-                if (source[matchPos] == source[srcPos] &&
-                    source[matchPos + 1] == source[srcPos + 1] &&
-                    source[matchPos + 2] == source[srcPos + 2] &&
-                    source[matchPos + 3] == source[srcPos + 3])
+            ushort currentTag = ctx.CurrentTag;
+
+            uint h = HashPointer(srcBase + srcPos);
+            int hi = (int)h;
+            uint matchPos = hashTags[hi] == currentTag ? hashTable[hi] : 0;
+
+            byte* srcPtr = srcBase + srcPos;
+            uint src4 = Unsafe.ReadUnaligned<uint>(srcPtr);
+            byte* srcEndPtr = srcBase + srcEnd;
+
+            uint lowest = (uint)lowestMatchPos;
+            uint distanceLimitPos = srcPos > LZ4_DISTANCE_MAX ? (uint)(srcPos - LZ4_DISTANCE_MAX) : 0;
+            if (distanceLimitPos > lowest) lowest = distanceLimitPos;
+
+            byte* matchPtr = srcBase + matchPos;
+            while (matchPos >= lowest && attempts > 0)
+            {
+                attempts--;
+
+                if (Unsafe.ReadUnaligned<uint>(matchPtr) == src4)
                 {
-                    int matchLength = MINMATCH + CountCommonBytes(source, (int)matchPos + MINMATCH, source, srcPos + MINMATCH, srcEnd - srcPos - MINMATCH);
-                    
+                    int matchLength = MINMATCH + CountCommonBytes(matchPtr + MINMATCH, srcPtr + MINMATCH, srcEndPtr);
                     if (matchLength > bestLength)
                     {
                         bestLength = matchLength;
                         bestPosition = (int)matchPos;
+                        if (matchLength >= targetLength)
+                            break;
                     }
                 }
 
-                // Follow chain
-                int delta = ctx.ChainTable[matchPos & (LZ4HC_MAXD - 1)];
+                uint delta = chainTable[matchPos & chainMask];
                 if (delta == 0) break;
-                matchPos -= (uint)delta;
+                matchPos -= delta;
+                matchPtr -= delta;
+
+                if (matchPos < lowest || attempts == 0)
+                    break;
+
+                attempts--;
+
+                if (Unsafe.ReadUnaligned<uint>(matchPtr) == src4)
+                {
+                    int matchLength = MINMATCH + CountCommonBytes(matchPtr + MINMATCH, srcPtr + MINMATCH, srcEndPtr);
+                    if (matchLength > bestLength)
+                    {
+                        bestLength = matchLength;
+                        bestPosition = (int)matchPos;
+                        if (matchLength >= targetLength)
+                            break;
+                    }
+                }
+
+                delta = chainTable[matchPos & chainMask];
+                if (delta == 0) break;
+                matchPos -= delta;
+                matchPtr -= delta;
             }
 
             return new MatchInfo(bestPosition, bestLength);

@@ -1,4 +1,6 @@
 using BenchmarkDotNet.Attributes;
+using K4os.Compression.LZ4;
+using LZ4Sharp;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -17,7 +19,7 @@ namespace LZ4Sharp.Benchmarks
     public class JsonBenchmarks
     {
         private static readonly DateTime BaseDate = new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-        private const int PayloadCount = 10000;
+        private const int PayloadCount = 100;
 
         // Arrays of unique payloads
         private byte[][] _payloads = null!;
@@ -32,6 +34,9 @@ namespace LZ4Sharp.Benchmarks
 
         [Params("1kb", "7kb", "16kb", "72kb")]
         public string JsonType { get; set; } = "1kb";
+
+        [Params(3, 6, 9, 12)]
+        public int CompressionLevel { get; set; } = LZ4HC.CLEVEL_DEFAULT;
 
         [GlobalSetup]
         public void Setup()
@@ -62,25 +67,28 @@ namespace LZ4Sharp.Benchmarks
                 _payloads[i] = GenerateUniqueJsonPayload(targetSize, i);
                 totalOriginalSize += _payloads[i].Length;
 
-                // Pre-compress with LZ4Sharp
-                int maxSize = LZ4Codec.CompressBound(_payloads[i].Length);
+                // Pre-compress with LZ4Sharp (LZ4HC)
+                int maxSize = LZ4HC.CompressBound(_payloads[i].Length);
                 _compressedLZ4Sharp[i] = new byte[maxSize];
-                _compressedSizesLZ4Sharp[i] = LZ4Codec.CompressDefault(
-                    _payloads[i], _compressedLZ4Sharp[i], _payloads[i].Length, maxSize);
+                _compressedSizesLZ4Sharp[i] = LZ4HC.CompressHC(
+                    _payloads[i], _compressedLZ4Sharp[i], _payloads[i].Length, maxSize, CompressionLevel);
                 totalCompressedLZ4Sharp += _compressedSizesLZ4Sharp[i];
 
-                // Pre-compress with K4os
+                // Pre-compress with K4os (same nominal level)
                 _compressedK4os[i] = new byte[K4os.Compression.LZ4.LZ4Codec.MaximumOutputSize(_payloads[i].Length)];
                 _compressedSizesK4os[i] = K4os.Compression.LZ4.LZ4Codec.Encode(
                     _payloads[i], 0, _payloads[i].Length,
                     _compressedK4os[i], 0, _compressedK4os[i].Length,
-                    K4os.Compression.LZ4.LZ4Level.L00_FAST);
+                    (LZ4Level)CompressionLevel);
                 totalCompressedK4os += _compressedSizesK4os[i];
             }
 
             // Allocate reusable buffers based on max size
             int maxPayloadSize = _payloads.Max(p => p.Length);
-            _compressBuffer = new byte[LZ4Codec.CompressBound(maxPayloadSize)];
+            int maxCompressedSize = Math.Max(
+                LZ4Codec.CompressBound(maxPayloadSize),
+                K4os.Compression.LZ4.LZ4Codec.MaximumOutputSize(maxPayloadSize));
+            _compressBuffer = new byte[maxCompressedSize];
             _decompressBuffer = new byte[maxPayloadSize];
 
             double avgSize = totalOriginalSize / (double)PayloadCount;
@@ -93,19 +101,19 @@ namespace LZ4Sharp.Benchmarks
 
         #region Compression Benchmarks - Process all 10,000 payloads
 
-        [Benchmark(Description = "LZ4Sharp - Compress 10K")]
+        [Benchmark(Description = "LZ4Sharp (LZ4HC) - Compress 100")]
         public long CompressAllLZ4Sharp()
         {
             long totalCompressed = 0;
             for (int i = 0; i < PayloadCount; i++)
             {
                 var payload = _payloads[i];
-                totalCompressed += LZ4Codec.CompressDefault(payload, _compressBuffer, payload.Length, _compressBuffer.Length);
+                totalCompressed += LZ4HC.CompressHC(payload, _compressBuffer, payload.Length, _compressBuffer.Length, CompressionLevel);
             }
             return totalCompressed;
         }
 
-        [Benchmark(Description = "K4os.LZ4 - Compress 10K", Baseline = true)]
+        [Benchmark(Description = "K4os.LZ4 - Compress 100", Baseline = true)]
         public long CompressAllK4os()
         {
             long totalCompressed = 0;
@@ -115,7 +123,7 @@ namespace LZ4Sharp.Benchmarks
                 totalCompressed += K4os.Compression.LZ4.LZ4Codec.Encode(
                     payload, 0, payload.Length,
                     _compressBuffer, 0, _compressBuffer.Length,
-                    K4os.Compression.LZ4.LZ4Level.L00_FAST);
+                    (LZ4Level)CompressionLevel);
             }
             return totalCompressed;
         }
@@ -124,7 +132,7 @@ namespace LZ4Sharp.Benchmarks
 
         #region Decompression Benchmarks - Process all 10,000 payloads
 
-        [Benchmark(Description = "LZ4Sharp - Decompress 10K")]
+        [Benchmark(Description = "LZ4Sharp - Decompress 100")]
         public long DecompressAllLZ4Sharp()
         {
             long totalDecompressed = 0;
@@ -138,7 +146,7 @@ namespace LZ4Sharp.Benchmarks
             return totalDecompressed;
         }
 
-        [Benchmark(Description = "K4os.LZ4 - Decompress 10K")]
+        [Benchmark(Description = "K4os.LZ4 - Decompress 100")]
         public long DecompressAllK4os()
         {
             long totalDecompressed = 0;
