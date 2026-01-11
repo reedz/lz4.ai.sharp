@@ -33,6 +33,7 @@ using System;
 using System.Buffers.Binary;
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
 
 namespace LZ4Sharp
@@ -151,10 +152,15 @@ namespace LZ4Sharp
         }
 
         // Internal context for HC compression
+        private struct HashEntry
+        {
+            public uint Pos;
+            public ushort Tag;
+        }
+
         private class HCContext
         {
-            public uint[] HashTable = new uint[LZ4HC_HASHTABLESIZE];
-            public ushort[] HashTags = new ushort[LZ4HC_HASHTABLESIZE];
+            public HashEntry[] HashTable = new HashEntry[LZ4HC_HASHTABLESIZE];
             public ushort CurrentTag;
 
             public ushort[] ChainTable = new ushort[LZ4HC_MAXD];
@@ -175,7 +181,7 @@ namespace LZ4Sharp
             ctx.CurrentTag++;
             if (ctx.CurrentTag == 0)
             {
-                Array.Clear(ctx.HashTags, 0, ctx.HashTags.Length);
+                Array.Clear(ctx.HashTable, 0, ctx.HashTable.Length);
                 ctx.CurrentTag = 1;
             }
             ctx.NextToUpdate = 0;
@@ -185,15 +191,14 @@ namespace LZ4Sharp
             unsafe
             {
                 fixed (byte* srcBase = source)
-                fixed (uint* hashTable = ctx.HashTable)
-                fixed (ushort* hashTags = ctx.HashTags)
+                fixed (HashEntry* hashTable = ctx.HashTable)
                 fixed (ushort* chainTable = ctx.ChainTable)
                 {
                     // Main loop
                     while (srcPos < srcLimit)
                     {
                         // Find match
-                        var match = FindBestMatch(ctx, srcBase, hashTable, hashTags, chainTable, srcPos, srcEnd, cParams.NbSearches, cParams.TargetLength, srcPos - LZ4_DISTANCE_MAX);
+                        var match = FindBestMatch(ctx, srcBase, hashTable, chainTable, srcPos, srcEnd, cParams.NbSearches, cParams.TargetLength, srcPos - LZ4_DISTANCE_MAX);
 
                         if (match.Length < MINMATCH)
                         {
@@ -318,6 +323,43 @@ namespace LZ4Sharp
             byte* start = p1;
             if (p1 >= end) return 0;
 
+            if (Vector256.IsHardwareAccelerated && p1 + 32 <= end)
+            {
+                while (p1 + 32 <= end)
+                {
+                    var v1 = Vector256.Load(p1);
+                    var v2 = Vector256.Load(p2);
+                    var eq = Vector256.Equals(v1, v2);
+                    uint mask = eq.ExtractMostSignificantBits();
+
+                    if (mask != 0xFFFFFFFF)
+                    {
+                        return (int)(p1 - start) + BitOperations.TrailingZeroCount(~mask);
+                    }
+
+                    p1 += 32;
+                    p2 += 32;
+                }
+            }
+            else if (Vector128.IsHardwareAccelerated && p1 + 16 <= end)
+            {
+                while (p1 + 16 <= end)
+                {
+                    var v1 = Vector128.Load(p1);
+                    var v2 = Vector128.Load(p2);
+                    var eq = Vector128.Equals(v1, v2);
+                    uint mask = eq.ExtractMostSignificantBits();
+
+                    if (mask != 0xFFFF)
+                    {
+                        return (int)(p1 - start) + BitOperations.TrailingZeroCount(~mask);
+                    }
+
+                    p1 += 16;
+                    p2 += 16;
+                }
+            }
+
             while (p1 + sizeof(ulong) <= end)
             {
                 ulong diff = Unsafe.ReadUnaligned<ulong>(p1) ^ Unsafe.ReadUnaligned<ulong>(p2);
@@ -357,8 +399,7 @@ namespace LZ4Sharp
         private static unsafe void InsertAndUpdate(
             HCContext ctx,
             byte* srcBase,
-            uint* hashTable,
-            ushort* hashTags,
+            HashEntry* hashTable,
             ushort* chainTable,
             uint target)
         {
@@ -371,13 +412,13 @@ namespace LZ4Sharp
                 uint h = HashPointer(srcBase + next);
                 int hi = (int)h;
 
-                uint prev = hashTags[hi] == currentTag ? hashTable[hi] : 0;
+                uint prev = hashTable[hi].Tag == currentTag ? hashTable[hi].Pos : 0;
                 int delta = (int)(next - prev);
                 if (delta > LZ4_DISTANCE_MAX) delta = LZ4_DISTANCE_MAX;
 
                 chainTable[next & chainMask] = (ushort)delta;
-                hashTable[hi] = next;
-                hashTags[hi] = currentTag;
+                hashTable[hi].Pos = next;
+                hashTable[hi].Tag = currentTag;
 
                 next++;
             }
@@ -385,11 +426,29 @@ namespace LZ4Sharp
             ctx.NextToUpdate = next;
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static unsafe bool CheckMatch(
+            byte* matchPtr, byte* srcPtr, byte* srcEndPtr, uint src4,
+            ref int bestLength, ref int bestPosition, int matchPos, int targetLength)
+        {
+            if (Unsafe.ReadUnaligned<uint>(matchPtr) == src4)
+            {
+                int matchLength = MINMATCH + CountCommonBytes(matchPtr + MINMATCH, srcPtr + MINMATCH, srcEndPtr);
+                if (matchLength > bestLength)
+                {
+                    bestLength = matchLength;
+                    bestPosition = matchPos;
+                    if (matchLength >= targetLength)
+                        return true;
+                }
+            }
+            return false;
+        }
+
         private static unsafe MatchInfo FindBestMatch(
             HCContext ctx,
             byte* srcBase,
-            uint* hashTable,
-            ushort* hashTags,
+            HashEntry* hashTable,
             ushort* chainTable,
             int srcPos,
             int srcEnd,
@@ -406,13 +465,13 @@ namespace LZ4Sharp
             int attempts = maxAttempts;
 
             // Update tables up to current position
-            InsertAndUpdate(ctx, srcBase, hashTable, hashTags, chainTable, (uint)srcPos);
+            InsertAndUpdate(ctx, srcBase, hashTable, chainTable, (uint)srcPos);
 
             ushort currentTag = ctx.CurrentTag;
 
             uint h = HashPointer(srcBase + srcPos);
             int hi = (int)h;
-            uint matchPos = hashTags[hi] == currentTag ? hashTable[hi] : 0;
+            uint matchPos = hashTable[hi].Tag == currentTag ? hashTable[hi].Pos : 0;
 
             byte* srcPtr = srcBase + srcPos;
             uint src4 = Unsafe.ReadUnaligned<uint>(srcPtr);
@@ -423,50 +482,56 @@ namespace LZ4Sharp
             if (distanceLimitPos > lowest) lowest = distanceLimitPos;
 
             byte* matchPtr = srcBase + matchPos;
+            
+            while (attempts >= 4)
+            {
+                if (matchPos < lowest) goto Result;
+                if (CheckMatch(matchPtr, srcPtr, srcEndPtr, src4, ref bestLength, ref bestPosition, (int)matchPos, targetLength)) goto Result;
+                
+                uint delta = chainTable[matchPos & chainMask];
+                if (delta == 0) goto Result;
+                matchPos -= delta;
+                matchPtr -= delta;
+
+                if (matchPos < lowest) goto Result;
+                if (CheckMatch(matchPtr, srcPtr, srcEndPtr, src4, ref bestLength, ref bestPosition, (int)matchPos, targetLength)) goto Result;
+
+                delta = chainTable[matchPos & chainMask];
+                if (delta == 0) goto Result;
+                matchPos -= delta;
+                matchPtr -= delta;
+
+                if (matchPos < lowest) goto Result;
+                if (CheckMatch(matchPtr, srcPtr, srcEndPtr, src4, ref bestLength, ref bestPosition, (int)matchPos, targetLength)) goto Result;
+
+                delta = chainTable[matchPos & chainMask];
+                if (delta == 0) goto Result;
+                matchPos -= delta;
+                matchPtr -= delta;
+
+                if (matchPos < lowest) goto Result;
+                if (CheckMatch(matchPtr, srcPtr, srcEndPtr, src4, ref bestLength, ref bestPosition, (int)matchPos, targetLength)) goto Result;
+
+                delta = chainTable[matchPos & chainMask];
+                if (delta == 0) goto Result;
+                matchPos -= delta;
+                matchPtr -= delta;
+
+                attempts -= 4;
+            }
+
             while (matchPos >= lowest && attempts > 0)
             {
                 attempts--;
-
-                if (Unsafe.ReadUnaligned<uint>(matchPtr) == src4)
-                {
-                    int matchLength = MINMATCH + CountCommonBytes(matchPtr + MINMATCH, srcPtr + MINMATCH, srcEndPtr);
-                    if (matchLength > bestLength)
-                    {
-                        bestLength = matchLength;
-                        bestPosition = (int)matchPos;
-                        if (matchLength >= targetLength)
-                            break;
-                    }
-                }
+                if (CheckMatch(matchPtr, srcPtr, srcEndPtr, src4, ref bestLength, ref bestPosition, (int)matchPos, targetLength)) goto Result;
 
                 uint delta = chainTable[matchPos & chainMask];
                 if (delta == 0) break;
                 matchPos -= delta;
                 matchPtr -= delta;
-
-                if (matchPos < lowest || attempts == 0)
-                    break;
-
-                attempts--;
-
-                if (Unsafe.ReadUnaligned<uint>(matchPtr) == src4)
-                {
-                    int matchLength = MINMATCH + CountCommonBytes(matchPtr + MINMATCH, srcPtr + MINMATCH, srcEndPtr);
-                    if (matchLength > bestLength)
-                    {
-                        bestLength = matchLength;
-                        bestPosition = (int)matchPos;
-                        if (matchLength >= targetLength)
-                            break;
-                    }
-                }
-
-                delta = chainTable[matchPos & chainMask];
-                if (delta == 0) break;
-                matchPos -= delta;
-                matchPtr -= delta;
             }
 
+        Result:
             return new MatchInfo(bestPosition, bestLength);
         }
     }

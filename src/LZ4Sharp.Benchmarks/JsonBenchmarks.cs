@@ -38,6 +38,10 @@ namespace LZ4Sharp.Benchmarks
         [Params(3, 6, 9, 12)]
         public int CompressionLevel { get; set; } = LZ4HC.CLEVEL_DEFAULT;
 
+        public double LZ4SharpRatio { get; private set; }
+        public double K4osRatio { get; private set; }
+        public long TotalOriginalSize { get; private set; }
+
         [GlobalSetup]
         public void Setup()
         {
@@ -92,11 +96,12 @@ namespace LZ4Sharp.Benchmarks
             _decompressBuffer = new byte[maxPayloadSize];
 
             double avgSize = totalOriginalSize / (double)PayloadCount;
-            double lz4SharpRatio = totalCompressedLZ4Sharp / (double)totalOriginalSize;
-            double k4osRatio = totalCompressedK4os / (double)totalOriginalSize;
+            LZ4SharpRatio = totalCompressedLZ4Sharp / (double)totalOriginalSize;
+            K4osRatio = totalCompressedK4os / (double)totalOriginalSize;
+            TotalOriginalSize = totalOriginalSize;
             
             Console.WriteLine($"Generated {PayloadCount} payloads, avg size: {avgSize:F0} bytes");
-            Console.WriteLine($"Compression ratios: LZ4Sharp={lz4SharpRatio:P1}, K4os={k4osRatio:P1}");
+            Console.WriteLine($"Compression ratios: LZ4Sharp={LZ4SharpRatio:P1}, K4os={K4osRatio:P1}");
         }
 
         #region Compression Benchmarks - Process all 10,000 payloads
