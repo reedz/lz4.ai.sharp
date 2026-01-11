@@ -71,6 +71,56 @@ namespace LZ4Sharp.Tests
         }
 
         [Fact]
+        public void LZ4HC_Compress_K4os_Decompress_SmallString()
+        {
+            // Arrange - Small strings should be compatible
+            string text = "Hello, World! This is a test string for HC compatibility.";
+            byte[] source = Encoding.UTF8.GetBytes(text);
+            int sourceSize = source.Length;
+
+            // Act - Compress with LZ4Sharp HC
+            byte[] compressed = new byte[LZ4HC.CompressBound(sourceSize)];
+            int compressedSize = LZ4HC.CompressHC(source, compressed, sourceSize, compressed.Length, LZ4HC.CLEVEL_DEFAULT);
+            Assert.True(compressedSize > 0, "LZ4HC compression should succeed");
+
+            // Act - Decompress with K4os
+            byte[] decompressed = new byte[sourceSize];
+            int decompressedSize = K4os.Compression.LZ4.LZ4Codec.Decode(
+                compressed, 0, compressedSize,
+                decompressed, 0, sourceSize);
+
+            // Assert
+            Assert.Equal(sourceSize, decompressedSize);
+            Assert.Equal(source, decompressed);
+        }
+
+        [Fact]
+        public void LZ4HC_Compress_K4os_Decompress_VerySmallData()
+        {
+            // Arrange - Very small data (< 100 bytes)
+            byte[] source = new byte[50];
+            for (int i = 0; i < source.Length; i++)
+            {
+                source[i] = (byte)(i % 256);
+            }
+
+            // Act - Compress with LZ4Sharp HC
+            byte[] compressed = new byte[LZ4HC.CompressBound(source.Length)];
+            int compressedSize = LZ4HC.CompressHC(source, compressed, source.Length, compressed.Length, LZ4HC.CLEVEL_DEFAULT);
+            Assert.True(compressedSize > 0, "LZ4HC compression should succeed");
+
+            // Act - Decompress with K4os
+            byte[] decompressed = new byte[source.Length];
+            int decompressedSize = K4os.Compression.LZ4.LZ4Codec.Decode(
+                compressed, 0, compressedSize,
+                decompressed, 0, source.Length);
+
+            // Assert
+            Assert.Equal(source.Length, decompressedSize);
+            Assert.Equal(source, decompressed);
+        }
+
+        [Fact]
         public void LZ4Sharp_Compress_K4os_Decompress_VerySmallData()
         {
             // Arrange - Very small data (< 100 bytes) works with both libraries

@@ -1,13 +1,9 @@
 /*
- * LZ4 - Fast LZ compression algorithm
- * C# Implementation - Unsafe optimized version
- * Copyright (c) 2026. Translated from C implementation by Yann Collet.
- * 
- * BSD 2-Clause License (http://www.opensource.org/licenses/bsd-license.php)
- * 
- * This file provides an unsafe implementation for maximum performance.
- * It uses pointer arithmetic similar to K4os.Compression.LZ4 to eliminate
- * bounds checking overhead and achieve near-native performance.
+ * LZ4 - Fast LZ compression algorithm (C# port)
+ * Derived from upstream LZ4: https://github.com/lz4/lz4
+ *
+ * This repository is MIT-licensed; see LICENSE.
+ * Third-party BSD-2-Clause notices for upstream: see THIRD-PARTY-NOTICES.md.
  */
 
 using System;
@@ -373,6 +369,10 @@ namespace LZ4Sharp
                                 
                                 // Compute next hash
                                 forwardH = Hash5Large(forwardIp);
+                                if (Sse.IsSupported)
+                                {
+                                    Sse.Prefetch0(&hashTable[forwardH]);
+                                }
                                 
                                 hashTable[h] = (uint)(ip - ibase);
                             }
@@ -931,77 +931,61 @@ namespace LZ4Sharp
         {
             byte* pStart = pIn;
 
-            // Use AVX-512 for 64-byte comparisons when available (fastest path)
-            if (Avx512BW.IsSupported)
+            if (Vector512.IsHardwareAccelerated && (pIn + 64 <= pInLimit))
             {
+                // Vector512 path (AVX-512)
                 while (pIn + 64 <= pInLimit)
                 {
-                    var a = Avx512F.LoadVector512(pIn);
-                    var b = Avx512F.LoadVector512(pMatch);
-                    ulong mask = Avx512BW.CompareEqual(a, b).ExtractMostSignificantBits();
+                    var a = Vector512.Load(pIn);
+                    var b = Vector512.Load(pMatch);
+                    var eq = Vector512.Equals(a, b);
+                    ulong mask = eq.ExtractMostSignificantBits();
+                    
                     if (mask != 0xFFFFFFFFFFFFFFFF)
                     {
-                        // Find first difference
-                        ulong diff = ~mask;
-                        int pos = System.Numerics.BitOperations.TrailingZeroCount(diff);
-                        return (uint)(pIn - pStart) + (uint)pos;
+                        return (uint)(pIn - pStart) + (uint)System.Numerics.BitOperations.TrailingZeroCount(~mask);
                     }
+                    
                     pIn += 64;
                     pMatch += 64;
                 }
-                
-                // Handle remaining 32+ bytes with AVX-512 (256-bit mode)
-                if (pIn + 32 <= pInLimit)
-                {
-                    var a = Avx512F.LoadVector256(pIn);
-                    var b = Avx512F.LoadVector256(pMatch);
-                    uint mask = Avx512BW.CompareEqual(a, b).ExtractMostSignificantBits();
-                    if (mask != 0xFFFFFFFF)
-                    {
-                        uint diff = ~mask;
-                        int pos = System.Numerics.BitOperations.TrailingZeroCount(diff);
-                        return (uint)(pIn - pStart) + (uint)pos;
-                    }
-                    pIn += 32;
-                    pMatch += 32;
-                }
             }
-            // Use AVX2 for 32-byte comparisons when available
-            else if (Avx2.IsSupported)
+            
+            if (Vector256.IsHardwareAccelerated && (pIn + 32 <= pInLimit))
             {
+                // Vector256 path (AVX2)
                 while (pIn + 32 <= pInLimit)
                 {
-                    var a = Avx.LoadVector256(pIn);
-                    var b = Avx.LoadVector256(pMatch);
-                    var eq = Avx2.CompareEqual(a, b);
-                    uint mask = (uint)Avx2.MoveMask(eq);
+                    var a = Vector256.Load(pIn);
+                    var b = Vector256.Load(pMatch);
+                    var eq = Vector256.Equals(a, b);
+                    uint mask = eq.ExtractMostSignificantBits();
+                    
                     if (mask != 0xFFFFFFFF)
                     {
-                        // Find first difference
-                        uint diff = ~mask;
-                        int pos = System.Numerics.BitOperations.TrailingZeroCount(diff);
-                        return (uint)(pIn - pStart) + (uint)pos;
+                        return (uint)(pIn - pStart) + (uint)System.Numerics.BitOperations.TrailingZeroCount(~mask);
                     }
+                    
                     pIn += 32;
                     pMatch += 32;
                 }
             }
-            // Use SSE2 for 16-byte comparisons when AVX2 not available
-            else if (Sse2.IsSupported)
+
+            if (Vector128.IsHardwareAccelerated && (pIn + 16 <= pInLimit))
             {
+                // Vector128 path (SSE2/NEON)
                 while (pIn + 16 <= pInLimit)
                 {
-                    var a = Sse2.LoadVector128(pIn);
-                    var b = Sse2.LoadVector128(pMatch);
-                    var eq = Sse2.CompareEqual(a, b);
-                    int mask = Sse2.MoveMask(eq);
+                    var a = Vector128.Load(pIn);
+                    var b = Vector128.Load(pMatch);
+                    var eq = Vector128.Equals(a, b);
+                    uint mask = eq.ExtractMostSignificantBits();
+                    
                     if (mask != 0xFFFF)
                     {
-                        // Find first difference
-                        int diff = ~mask & 0xFFFF;
-                        int pos = System.Numerics.BitOperations.TrailingZeroCount(diff);
-                        return (uint)(pIn - pStart) + (uint)pos;
+                        return (uint)(pIn - pStart) + (uint)System.Numerics.BitOperations.TrailingZeroCount(~mask);
                     }
+                    
                     pIn += 16;
                     pMatch += 16;
                 }
@@ -1091,7 +1075,6 @@ namespace LZ4Sharp
             long length = dstEnd - dst;
             
             // Optimization 3A: Inline unroll for common short literal lengths (0-31 bytes)
-            // JSON typically has many short literals between keys/values
             if (length <= 8)
             {
                 Copy8(dst, src);
@@ -1119,39 +1102,38 @@ namespace LZ4Sharp
                 return;
             }
             
-            // Use AVX-512 for 64-byte copies when available (fastest path)
-            if (Avx512F.IsSupported)
+            // Use Vector512 (AVX-512)
+            if (Vector512.IsHardwareAccelerated)
             {
                 while (dst + 64 <= dstEnd)
                 {
-                    Avx512F.Store(dst, Avx512F.LoadVector512(src));
+                    Vector512.Load(src).Store(dst);
                     dst += 64;
                     src += 64;
                 }
-                // Handle remaining 32+ bytes
                 if (dst + 32 <= dstEnd)
                 {
-                    Avx.Store(dst, Avx.LoadVector256(src));
+                    Vector256.Load(src).Store(dst);
                     dst += 32;
                     src += 32;
                 }
             }
-            // Use AVX2 for 32-byte copies when available
-            else if (Avx2.IsSupported)
+            // Use Vector256 (AVX2)
+            else if (Vector256.IsHardwareAccelerated)
             {
                 while (dst + 32 <= dstEnd)
                 {
-                    Avx.Store(dst, Avx.LoadVector256(src));
+                    Vector256.Load(src).Store(dst);
                     dst += 32;
                     src += 32;
                 }
             }
-            // Fallback to SSE2 for 16-byte copies
-            else if (Sse2.IsSupported)
+            // Use Vector128 (SSE2/NEON)
+            else if (Vector128.IsHardwareAccelerated)
             {
                 while (dst + 16 <= dstEnd)
                 {
-                    Sse2.Store(dst, Sse2.LoadVector128(src));
+                    Vector128.Load(src).Store(dst);
                     dst += 16;
                     src += 16;
                 }
