@@ -7,6 +7,7 @@ This project contains performance benchmarks comparing LZ4Sharp against popular 
 ## Available Benchmarks
 
 1. **JSON Benchmarks** - 10,000 unique JSON payloads; compares **LZ4Sharp (LZ4HC)** at levels 3/6/9/12 vs **K4os** at the same nominal level.
+2. **Frame vs Pickler Benchmarks** - compares **LZ4Sharp (LZ4Frame)** vs **K4os (LZ4Pickler)** using the same JSON payload corpus.
 
 ## Benchmark Results
 

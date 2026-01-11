@@ -7,6 +7,7 @@
  */
 
 using System;
+using System.Buffers;
 using System.Runtime.CompilerServices;
 
 namespace LZ4Sharp
@@ -114,26 +115,30 @@ namespace LZ4Sharp
             int srcPos = 0;
             int blockSize = prefs.GetBlockSize();
 
-            while (srcPos < sourceSize)
+            int scratchSize = Math.Min(blockSize, sourceSize);
+            byte[] tempSrc = ArrayPool<byte>.Shared.Rent(scratchSize);
+            byte[] compressedBlock = ArrayPool<byte>.Shared.Rent(LZ4Codec.CompressBound(scratchSize));
+
+            try
             {
-                int currentBlockSize = Math.Min(blockSize, sourceSize - srcPos);
-                
-                // Compress block
-                byte[] tempSrc = new byte[currentBlockSize];
-                Array.Copy(source, srcPos, tempSrc, 0, currentBlockSize);
-
-                int maxCompressedSize = LZ4Codec.CompressBound(currentBlockSize);
-                byte[] compressedBlock = new byte[maxCompressedSize];
-
-                int compressedSize;
-                if (prefs.CompressionLevel >= LZ4HC.CLEVEL_MIN)
+                while (srcPos < sourceSize)
                 {
-                    compressedSize = LZ4HC.CompressHC(tempSrc, compressedBlock, currentBlockSize, maxCompressedSize, prefs.CompressionLevel);
-                }
-                else
-                {
-                    compressedSize = LZ4Codec.CompressDefault(tempSrc, compressedBlock, currentBlockSize, maxCompressedSize);
-                }
+                    int currentBlockSize = Math.Min(blockSize, sourceSize - srcPos);
+
+                    // Compress block
+                    Array.Copy(source, srcPos, tempSrc, 0, currentBlockSize);
+
+                    int maxCompressedSize = LZ4Codec.CompressBound(currentBlockSize);
+
+                    int compressedSize;
+                    if (prefs.CompressionLevel >= LZ4HC.CLEVEL_MIN)
+                    {
+                        compressedSize = LZ4HC.CompressHC(tempSrc, compressedBlock, currentBlockSize, maxCompressedSize, prefs.CompressionLevel);
+                    }
+                    else
+                    {
+                        compressedSize = LZ4Codec.CompressDefault(tempSrc, compressedBlock, currentBlockSize, maxCompressedSize);
+                    }
 
                 if (compressedSize <= 0)
                     return -1;
@@ -168,6 +173,12 @@ namespace LZ4Sharp
                 }
 
                 srcPos += currentBlockSize;
+            }
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(tempSrc);
+                ArrayPool<byte>.Shared.Return(compressedBlock);
             }
 
             // Write end mark (block size = 0)
@@ -289,11 +300,9 @@ namespace LZ4Sharp
 
                 if (isCompressed)
                 {
-                    // Decompress block
-                    byte[] compressedBlock = new byte[blockSize];
-                    Array.Copy(source, srcPos, compressedBlock, 0, blockSize);
-
-                    int decompressedSize = LZ4Codec.DecompressSafe(compressedBlock, destination, blockSize, maxDestinationSize - dstPos, dstPos);
+                    int decompressedSize = LZ4Codec.DecompressSafe(
+                        source.AsSpan(srcPos, blockSize),
+                        destination.AsSpan(dstPos, maxDestinationSize - dstPos));
                     if (decompressedSize < 0)
                         return -1;
 
@@ -319,10 +328,8 @@ namespace LZ4Sharp
                     return -1;
 
                 uint storedChecksum = (uint)(source[srcPos] | (source[srcPos + 1] << 8) | (source[srcPos + 2] << 16) | (source[srcPos + 3] << 24));
-                
-                byte[] decompressedData = new byte[dstPos];
-                Array.Copy(destination, 0, decompressedData, 0, dstPos);
-                uint calculatedChecksum = XXHash.XXH32(decompressedData, 0);
+
+                uint calculatedChecksum = XXHash.XXH32(destination, dstPos, 0);
 
                 if (storedChecksum != calculatedChecksum)
                     return -1;
