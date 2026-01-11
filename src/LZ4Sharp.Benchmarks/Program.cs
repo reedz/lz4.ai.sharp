@@ -15,6 +15,12 @@ internal static class Program
             return;
         }
 
+        if (args.Contains("--silesia"))
+        {
+            SilesiaAnalysis.Run();
+            return;
+        }
+
         BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
     }
 
