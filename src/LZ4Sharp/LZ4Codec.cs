@@ -1,13 +1,9 @@
 /*
- * LZ4 - Fast LZ compression algorithm
- * C# Implementation - Unsafe optimized version
- * Copyright (c) 2026. Translated from C implementation by Yann Collet.
- * 
- * BSD 2-Clause License (http://www.opensource.org/licenses/bsd-license.php)
- * 
- * This file provides an unsafe implementation for maximum performance.
- * It uses pointer arithmetic similar to K4os.Compression.LZ4 to eliminate
- * bounds checking overhead and achieve near-native performance.
+ * LZ4 - Fast LZ compression algorithm (C# port)
+ * Derived from upstream LZ4: https://github.com/lz4/lz4
+ *
+ * This repository is MIT-licensed; see LICENSE.
+ * Third-party BSD-2-Clause notices for upstream: see THIRD-PARTY-NOTICES.md.
  */
 
 using System;

@@ -19,7 +19,7 @@
     <Version>0.1.0</Version>
     <Authors>reedz</Authors>
     <Description>AI-generated C# port of the LZ4 compression algorithm (block + HC), based on the upstream reference implementation.</Description>
-    <PackageLicenseExpression>BSD-2-Clause</PackageLicenseExpression>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/reedz/lz4.ai.sharp</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageProjectUrl>https://github.com/reedz/lz4.ai.sharp</PackageProjectUrl>
@@ -33,6 +33,7 @@
   <ItemGroup>
     <None Include="../../README.md" Pack="true" PackagePath="\" />
     <None Include="../../LICENSE" Pack="true" PackagePath="\" />
+    <None Include="../../THIRD-PARTY-NOTICES.md" Pack="true" PackagePath="\" />
   </ItemGroup>
 
 </Project>

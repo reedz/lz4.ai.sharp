@@ -2,7 +2,6 @@ using BenchmarkDotNet.Attributes;
 using K4os.Compression.LZ4;
 using LZ4Sharp;
 using System;
-using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
@@ -11,8 +10,7 @@ namespace LZ4Sharp.Benchmarks
 {
     /// <summary>
     /// Focused JSON benchmarks comparing LZ4Sharp against K4os.Compression.LZ4
-    /// Processes 10,000 unique JSON payloads with different internal values
-    /// Target: 2x faster than K4os
+    /// Processes 100 unique JSON payloads with different internal values
     /// </summary>
     [MemoryDiagnoser]
     [SimpleJob(warmupCount: 2, iterationCount: 3)]
@@ -27,7 +25,7 @@ namespace LZ4Sharp.Benchmarks
         private byte[][] _compressedK4os = null!;
         private int[] _compressedSizesLZ4Sharp = null!;
         private int[] _compressedSizesK4os = null!;
-        
+
         // Reusable buffers
         private byte[] _compressBuffer = null!;
         private byte[] _decompressBuffer = null!;
@@ -55,7 +53,7 @@ namespace LZ4Sharp.Benchmarks
             };
 
             Console.WriteLine($"Generating {PayloadCount} unique JSON payloads of ~{JsonType}...");
-            
+
             _payloads = new byte[PayloadCount][];
             _compressedLZ4Sharp = new byte[PayloadCount][];
             _compressedK4os = new byte[PayloadCount][];
@@ -99,12 +97,10 @@ namespace LZ4Sharp.Benchmarks
             LZ4SharpRatio = totalCompressedLZ4Sharp / (double)totalOriginalSize;
             K4osRatio = totalCompressedK4os / (double)totalOriginalSize;
             TotalOriginalSize = totalOriginalSize;
-            
+
             Console.WriteLine($"Generated {PayloadCount} payloads, avg size: {avgSize:F0} bytes");
             Console.WriteLine($"Compression ratios: LZ4Sharp={LZ4SharpRatio:P1}, K4os={K4osRatio:P1}");
         }
-
-        #region Compression Benchmarks - Process all 10,000 payloads
 
         [Benchmark(Description = "LZ4Sharp (LZ4HC) - Compress 100")]
         public long CompressAllLZ4Sharp()
@@ -132,10 +128,6 @@ namespace LZ4Sharp.Benchmarks
             }
             return totalCompressed;
         }
-
-        #endregion
-
-        #region Decompression Benchmarks - Process all 10,000 payloads
 
         [Benchmark(Description = "LZ4Sharp - Decompress 100")]
         public long DecompressAllLZ4Sharp()
@@ -167,25 +159,17 @@ namespace LZ4Sharp.Benchmarks
             return totalDecompressed;
         }
 
-        #endregion
-
-        #region JSON Data Generators
-
-        /// <summary>
-        /// Generate a unique JSON payload with different internal values based on seed
-        /// </summary>
         private static byte[] GenerateUniqueJsonPayload(int targetSize, int seed)
         {
             var random = new Random(42 + seed);
             var sb = new StringBuilder();
             sb.Append('[');
-            
+
             int itemIndex = 0;
             while (sb.Length < targetSize - 300)
             {
                 if (itemIndex > 0) sb.Append(',');
-                
-                // Create unique values for each payload
+
                 var item = new
                 {
                     id = Guid.NewGuid().ToString(),
@@ -197,10 +181,11 @@ namespace LZ4Sharp.Benchmarks
                     active = random.Next(2) == 1,
                     score = random.NextDouble() * 1000,
                     balance = random.NextDouble() * 10000 - 5000,
-                    tags = new[] { 
-                        $"tag{random.Next(1, 50)}", 
-                        $"tag{random.Next(50, 100)}", 
-                        $"tag{random.Next(100, 150)}" 
+                    tags = new[]
+                    {
+                        $"tag{random.Next(1, 50)}",
+                        $"tag{random.Next(50, 100)}",
+                        $"tag{random.Next(100, 150)}"
                     },
                     metadata = new
                     {
@@ -210,15 +195,13 @@ namespace LZ4Sharp.Benchmarks
                         created = BaseDate.AddDays(random.Next(0, 1000)).ToString("yyyy-MM-dd")
                     }
                 };
-                
+
                 sb.Append(JsonSerializer.Serialize(item));
                 itemIndex++;
             }
-            
+
             sb.Append(']');
             return Encoding.UTF8.GetBytes(sb.ToString());
         }
-
-        #endregion
     }
 }

@@ -52,4 +52,6 @@ dotnet pack src/LZ4Sharp/LZ4Sharp.csproj -c Release
 
 ## License
 
-BSD-2-Clause (same license as upstream LZ4).
+MIT.
+
+This project is derived from upstream LZ4 and therefore includes third-party BSD-2-Clause notices; see `THIRD-PARTY-NOTICES.md`.
