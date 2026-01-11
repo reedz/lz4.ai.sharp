@@ -1,5 +1,9 @@
 # LZ4.AI.Sharp
 
+[![NuGet](https://img.shields.io/nuget/v/LZ4.AI.Sharp.svg)](https://www.nuget.org/packages/LZ4.AI.Sharp/)
+[![NuGet Downloads](https://img.shields.io/nuget/dt/LZ4.AI.Sharp.svg)](https://www.nuget.org/packages/LZ4.AI.Sharp/)
+[![License](https://img.shields.io/github/license/reedz/lz4.ai.sharp.svg)](LICENSE)
+
 A **C#/.NET** implementation of the **LZ4** compression algorithm (block + HC), generated end-to-end by AI as a learning/experimentation repo.
 
 ## Provenance / AI-generated notice

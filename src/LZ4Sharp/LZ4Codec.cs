@@ -64,14 +64,8 @@ namespace LZ4Sharp
         /// </summary>
         public static int CompressDefault(byte[] source, byte[] destination, int sourceSize, int maxDestinationSize)
         {
-            if (source == null || destination == null || sourceSize <= 0 || maxDestinationSize <= 0)
-                return -1;
-
-            fixed (byte* srcPtr = source)
-            fixed (byte* dstPtr = destination)
-            {
-                return CompressUnsafe(srcPtr, dstPtr, sourceSize, maxDestinationSize);
-            }
+            // Prefer HC at the minimum level to improve ratio while keeping CPU cost modest.
+            return LZ4HC.CompressHC(source, destination, sourceSize, maxDestinationSize, LZ4HC.CLEVEL_MIN);
         }
 
         /// <summary>
@@ -82,10 +76,21 @@ namespace LZ4Sharp
             if (source.Length <= 0 || destination.Length <= 0)
                 return -1;
 
-            fixed (byte* srcPtr = source)
-            fixed (byte* dstPtr = destination)
+            // LZ4HC currently operates on arrays; use pooled buffers to avoid allocations.
+            byte[] src = ArrayPool<byte>.Shared.Rent(source.Length);
+            byte[] dst = ArrayPool<byte>.Shared.Rent(destination.Length);
+            try
             {
-                return CompressUnsafe(srcPtr, dstPtr, source.Length, destination.Length);
+                source.CopyTo(src);
+                int result = LZ4HC.CompressHC(src, dst, source.Length, destination.Length, LZ4HC.CLEVEL_MIN);
+                if (result > 0)
+                    dst.AsSpan(0, result).CopyTo(destination);
+                return result;
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(src);
+                ArrayPool<byte>.Shared.Return(dst);
             }
         }
 

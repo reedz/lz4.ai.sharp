@@ -300,9 +300,9 @@ namespace LZ4Sharp
             byte* start = p1;
             if (p1 >= end) return 0;
 
-            if (Vector256.IsHardwareAccelerated && p1 + 32 <= end)
+            if (Vector256.IsHardwareAccelerated && p1 + 32 <= end && p2 + 32 <= end)
             {
-                while (p1 + 32 <= end)
+                while (p1 + 32 <= end && p2 + 32 <= end)
                 {
                     var v1 = Vector256.Load(p1);
                     var v2 = Vector256.Load(p2);
@@ -318,9 +318,9 @@ namespace LZ4Sharp
                     p2 += 32;
                 }
             }
-            else if (Vector128.IsHardwareAccelerated && p1 + 16 <= end)
+            else if (Vector128.IsHardwareAccelerated && p1 + 16 <= end && p2 + 16 <= end)
             {
-                while (p1 + 16 <= end)
+                while (p1 + 16 <= end && p2 + 16 <= end)
                 {
                     var v1 = Vector128.Load(p1);
                     var v2 = Vector128.Load(p2);
@@ -337,7 +337,7 @@ namespace LZ4Sharp
                 }
             }
 
-            while (p1 + sizeof(ulong) <= end)
+            while (p1 + sizeof(ulong) <= end && p2 + sizeof(ulong) <= end)
             {
                 ulong diff = Unsafe.ReadUnaligned<ulong>(p1) ^ Unsafe.ReadUnaligned<ulong>(p2);
                 if (diff == 0)
@@ -350,7 +350,7 @@ namespace LZ4Sharp
                 return (int)(p1 - start) + (BitOperations.TrailingZeroCount(diff) >> 3);
             }
 
-            while (p1 + sizeof(uint) <= end)
+            while (p1 + sizeof(uint) <= end && p2 + sizeof(uint) <= end)
             {
                 uint diff = Unsafe.ReadUnaligned<uint>(p1) ^ Unsafe.ReadUnaligned<uint>(p2);
                 if (diff == 0)
@@ -363,7 +363,7 @@ namespace LZ4Sharp
                 return (int)(p1 - start) + (BitOperations.TrailingZeroCount(diff) >> 3);
             }
 
-            while (p1 < end && *p1 == *p2)
+            while (p1 < end && p2 < end && *p1 == *p2)
             {
                 p1++;
                 p2++;
@@ -452,7 +452,8 @@ namespace LZ4Sharp
 
             byte* srcPtr = srcBase + srcPos;
             uint src4 = Unsafe.ReadUnaligned<uint>(srcPtr);
-            byte* srcEndPtr = srcBase + srcEnd;
+            // Match length must stop before the last literals region to produce a standard LZ4 block.
+            byte* srcEndPtr = srcBase + srcEnd - LASTLITERALS;
 
             uint lowest = (uint)lowestMatchPos;
             uint distanceLimitPos = srcPos > LZ4_DISTANCE_MAX ? (uint)(srcPos - LZ4_DISTANCE_MAX) : 0;
