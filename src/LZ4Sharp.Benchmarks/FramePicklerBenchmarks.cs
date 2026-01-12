@@ -29,6 +29,10 @@ namespace LZ4Sharp.Benchmarks
         [Params(3, 6, 9, 12)]
         public int CompressionLevel { get; set; } = LZ4HC.CLEVEL_DEFAULT;
 
+        public double FrameRatio { get; private set; }
+        public double PicklerRatio { get; private set; }
+        public long TotalOriginalSize { get; private set; }
+
         [GlobalSetup]
         public void Setup()
         {
@@ -60,9 +64,14 @@ namespace LZ4Sharp.Benchmarks
             _compressedFrames = new byte[PayloadCount][];
             _compressedPickles = new byte[PayloadCount][];
 
+            long totalOriginalSize = 0;
+            long totalFramesSize = 0;
+            long totalPicklesSize = 0;
+
             for (int i = 0; i < PayloadCount; i++)
             {
                 var payload = _payloads[i];
+                totalOriginalSize += payload.Length;
 
                 int frameSize = LZ4Frame.CompressFrame(_frameBuffer, _frameBuffer.Length, payload, payload.Length, _framePrefs);
                 if (frameSize <= 0) throw new InvalidOperationException("LZ4Frame.CompressFrame failed");
@@ -70,9 +79,16 @@ namespace LZ4Sharp.Benchmarks
                 var frame = new byte[frameSize];
                 Array.Copy(_frameBuffer, 0, frame, 0, frameSize);
                 _compressedFrames[i] = frame;
+                totalFramesSize += frameSize;
 
-                _compressedPickles[i] = LZ4Pickler.Pickle(payload, (LZ4Level)CompressionLevel);
+                var pickle = LZ4Pickler.Pickle(payload, (LZ4Level)CompressionLevel);
+                _compressedPickles[i] = pickle;
+                totalPicklesSize += pickle.Length;
             }
+
+            TotalOriginalSize = totalOriginalSize;
+            FrameRatio = totalFramesSize / (double)totalOriginalSize;
+            PicklerRatio = totalPicklesSize / (double)totalOriginalSize;
         }
 
         [Benchmark(Description = "LZ4Sharp LZ4Frame - Compress 100")]

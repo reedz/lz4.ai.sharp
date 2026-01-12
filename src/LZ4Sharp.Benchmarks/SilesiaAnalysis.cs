@@ -49,6 +49,22 @@ internal static class SilesiaAnalysis
             }
             Console.WriteLine("-----------------------------------------------------------------------------------------------------------------------------------------------------------------");
         }
+
+        Console.WriteLine();
+        Console.WriteLine("-----------------------------------------------------------------------------------------------------------------------------------------------------------------");
+        Console.WriteLine($"| {"File",-10} | {"Size",10} | {"Level",-7} | {"Frame %",-10} | {"Pickler %",-10} | {"Frame",-10} | {"Pickler",-10} | {"Speedup",-8} |");
+        Console.WriteLine($"| {"",-10} | {"(bytes)",10} | {"",-7} | {"",-10} | {"",-10} | {"(MB/s)",-10} | {"(MB/s)",-10} | {"",-8} |");
+        Console.WriteLine("-----------------------------------------------------------------------------------------------------------------------------------------------------------------");
+
+        foreach (var file in LoadCorpusFiles(corpusDir))
+        {
+            foreach (var c in cases)
+            {
+                var metrics = MeasureFramePickler(file.Data, c);
+                Console.WriteLine($"| {file.Name,-10} | {file.Data.Length,10:N0} | {c.Name,-7} | {metrics.FrameRatio,10:P2} | {metrics.PicklerRatio,10:P2} | {metrics.FrameMBs,10:F1} | {metrics.PicklerMBs,10:F1} | {(metrics.FrameMBs / metrics.PicklerMBs),8:F2}x |");
+            }
+            Console.WriteLine("-----------------------------------------------------------------------------------------------------------------------------------------------------------------");
+        }
     }
 
     private static IEnumerable<(string Name, byte[] Data)> LoadCorpusFiles(string corpusDir)
@@ -101,6 +117,32 @@ internal static class SilesiaAnalysis
             input, 0, input.Length,
             dest, 0, dest.Length,
             c.K4osLevel);
+    }
+
+    private static (double FrameRatio, double PicklerRatio, double FrameMBs, double PicklerMBs) MeasureFramePickler(byte[] input, Case c)
+    {
+        var prefs = new LZ4Frame.FramePreferences
+        {
+            BlockMode = LZ4Frame.BlockMode.Independent,
+            CompressionLevel = c.LZ4SharpLevel ?? 0
+        };
+
+        byte[] frameDest = new byte[LZ4Frame.CompressFrameBound(input.Length, prefs)];
+
+        // Pre-compress once to compute ratios.
+        int frameSize = LZ4Frame.CompressFrame(frameDest, frameDest.Length, input, input.Length, prefs);
+        if (frameSize <= 0) throw new InvalidOperationException("LZ4Frame.CompressFrame failed");
+
+        int pickleSize = LZ4Pickler.Pickle(input, c.K4osLevel).Length;
+
+        double frameRatio = frameSize / (double)input.Length;
+        double pickleRatio = pickleSize / (double)input.Length;
+
+        // Throughput.
+        double frameMBs = MeasureMBs(() => LZ4Frame.CompressFrame(frameDest, frameDest.Length, input, input.Length, prefs), input.Length);
+        double picklerMBs = MeasureMBs(() => LZ4Pickler.Pickle(input, c.K4osLevel).Length, input.Length);
+
+        return (frameRatio, pickleRatio, frameMBs, picklerMBs);
     }
 
     private static double MeasureMBs(Func<int> action, int bytesPerOp)

@@ -8,6 +8,7 @@ This project contains performance benchmarks comparing LZ4Sharp against popular 
 
 1. **JSON Benchmarks** - 10,000 unique JSON payloads; compares **LZ4Sharp (LZ4HC)** at levels 3/6/9/12 vs **K4os** at the same nominal level.
 2. **Frame vs Pickler Benchmarks** - compares **LZ4Sharp (LZ4Frame)** vs **K4os (LZ4Pickler)** using the same JSON payload corpus.
+3. **JSON Dataset Benchmarks** - synthetic corpus (1150 payloads) shaped like common JSON objects (Twitter/GitHub/Kubernetes/GeoJSON) split into buckets: <10kb / <100kb / <1mb / >1mb.
 
 ## Benchmark Results
 
@@ -79,9 +80,31 @@ K4os.LZ4 prioritizes:
 
 ## Running the Benchmarks
 
+### Silesia corpus (BenchmarkDotNet)
+
+```bash
+cd LZ4Sharp.Benchmarks
+# LZ4Sharp vs K4os codec on Silesia
+dotnet run -c Release -- --filter "*SilesiaCodecBenchmarks*" --job short
+
+# LZ4Frame vs K4os Pickler on Silesia
+dotnet run -c Release -- --filter "*SilesiaFramePicklerBenchmarks*" --job short
+```
+
 ```bash
 cd LZ4Sharp.Benchmarks
 dotnet run -c Release -- --filter "*JsonBenchmarks*"
+```
+
+### JSON Dataset corpus (synthetic)
+
+```bash
+cd LZ4Sharp.Benchmarks
+# quick validation
+dotnet run -c Release -- --json-dataset-stats
+
+# run the BenchmarkDotNet benchmark
+dotnet run -c Release -- --filter "*JsonDatasetBenchmarks*" --job short
 ```
 
 Benchmark parameters:
