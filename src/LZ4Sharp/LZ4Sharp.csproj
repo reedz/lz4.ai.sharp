@@ -16,7 +16,7 @@
     <!-- NuGet packaging -->
     <IsPackable>true</IsPackable>
     <PackageId>LZ4.AI.Sharp</PackageId>
-    <Version>0.1.0</Version>
+    <Version>1.0.0</Version>
     <Authors>reedz</Authors>
     <Description>AI-generated C# port of the LZ4 compression algorithm (block + HC), based on the upstream reference implementation.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
