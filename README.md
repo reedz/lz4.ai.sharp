@@ -2,8 +2,8 @@
 
 > ⚠️ **AI-Generated Code** — This entire library was migrated from C to C# and performance-tuned using GitHub Copilot.
 
-[![NuGet](https://img.shields.io/nuget/v/LZ4.AI.Sharp.svg)](https://www.nuget.org/packages/LZ4.AI.Sharp/)
-[![License](https://img.shields.io/github/license/reedz/lz4.ai.sharp.svg)](LICENSE)
+[![NuGet](https://img.shields.io/nuget/v/LZ4.AI.Sharp)](https://www.nuget.org/packages/LZ4.AI.Sharp/)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 A high-performance **C#/.NET** implementation of the **LZ4** compression algorithm, featuring both fast and high-compression modes. This library was created as an AI-assisted port of the LZ4 reference implementation to demonstrate modern AI-powered code migration and optimization.
 
