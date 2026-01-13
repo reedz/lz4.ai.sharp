@@ -13,7 +13,7 @@ A high-performance **C#/.NET** implementation of the **LZ4** compression algorit
 - **High Compression** (`LZ4HC`) — Better compression ratios at slower speeds
 - **Frame Format** (`LZ4Frame`) — Stream-oriented API with checksums and metadata
 - **XXHash** — Fast non-cryptographic hash function
-- **Pure Managed C#** — No unsafe code dependencies, runs on any .NET platform
+- **Pure Managed C#** — No external native library dependencies, runs on any .NET platform (uses unsafe code for performance)
 - **Zero Allocations** — Work directly with byte arrays and spans
 
 ## Installation
@@ -31,7 +31,8 @@ using LZ4Sharp;
 
 byte[] input = GetYourData();
 byte[] compressed = new byte[LZ4Codec.CompressBound(input.Length)];
-int compressedSize = LZ4Codec.CompressDefault(input, compressed, input.Length, compressed.Length);
+// accel: 1 (higher compression) to 65537 (faster), default is 1
+int compressedSize = LZ4Codec.CompressFast(input, compressed, input.Length, compressed.Length, acceleration: 1);
 
 byte[] decompressed = new byte[input.Length];
 LZ4Codec.DecompressSafe(compressed, decompressed, compressedSize, decompressed.Length);
