@@ -9,7 +9,6 @@ using System.Text.Json;
 namespace LZ4Sharp.Benchmarks
 {
     [MemoryDiagnoser]
-    [SimpleJob(warmupCount: 2, iterationCount: 3)]
     public class FramePicklerBenchmarks
     {
         private static readonly DateTime BaseDate = new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc);

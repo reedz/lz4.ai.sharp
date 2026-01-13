@@ -39,6 +39,12 @@ internal static class Program
             return;
         }
 
+        if (args.Contains("--level0-profile"))
+        {
+            Environment.Exit(Level0ProfileHarness.Run(args));
+            return;
+        }
+
         BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
     }
 

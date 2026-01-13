@@ -7,7 +7,6 @@ using System.Linq;
 namespace LZ4Sharp.Benchmarks;
 
 [MemoryDiagnoser]
-[SimpleJob(warmupCount: 2, iterationCount: 3)]
 public class JsonDatasetBenchmarks
 {
     private JsonDatasetCorpus.Payload[] _payloads = null!;

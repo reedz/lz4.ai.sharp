@@ -106,7 +106,7 @@ internal static class SilesiaAnalysis
     private static int CompressLZ4Sharp(byte[] input, byte[] dest, Case c)
     {
         if (c.LZ4SharpLevel is null)
-            return LZ4Codec.CompressDefault(input, dest, input.Length, dest.Length);
+            return LZ4Codec.CompressFast(input, dest, input.Length, dest.Length);
 
         return LZ4HC.CompressHC(input, dest, input.Length, dest.Length, c.LZ4SharpLevel.Value);
     }

@@ -84,7 +84,13 @@ K4os.LZ4 prioritizes:
 
 ```bash
 cd LZ4Sharp.Benchmarks
-# LZ4Sharp vs K4os codec on Silesia
+# Dedicated level-0 (fastest) codec compression
+dotnet run -c Release -- --filter "*SilesiaCodecLevel0Benchmarks*" --job short
+
+# Optional: limit Silesia corpus to a single file
+SILESIA_FILE=dickens dotnet run -c Release -- --filter "*SilesiaCodecLevel0Benchmarks*" --job short
+
+# Multi-level codec benchmark
 dotnet run -c Release -- --filter "*SilesiaCodecBenchmarks*" --job short
 
 # LZ4Frame vs K4os Pickler on Silesia
@@ -103,7 +109,10 @@ cd LZ4Sharp.Benchmarks
 # quick validation
 dotnet run -c Release -- --json-dataset-stats
 
-# run the BenchmarkDotNet benchmark
+# Dedicated level-0 (fastest) codec compression
+dotnet run -c Release -- --filter "*JsonDatasetLevel0Benchmarks*" --job short
+
+# Multi-level (LZ4HC) benchmark
 dotnet run -c Release -- --filter "*JsonDatasetBenchmarks*" --job short
 ```
 
@@ -138,9 +147,9 @@ dotnet run -c Release -- --filter "*Compress*" --job short
 ## Interpreting Results
 
 - **Mean**: Average time per operation
-- **Ratio**: Performance relative to baseline (K4os.LZ4)
+- **Ratio**: Performance relative to baseline (BenchmarkDotNet)
+- **CRatio**: Compression ratio = compressedBytes / inputBytes (lower is better)
 - **Allocated**: Memory allocated per operation
-- Lower is better for all metrics
 
 ## Compared Libraries
 

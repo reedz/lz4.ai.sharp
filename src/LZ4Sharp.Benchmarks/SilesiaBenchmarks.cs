@@ -15,7 +15,6 @@ namespace LZ4Sharp.Benchmarks;
 /// Downloads/extracts the corpus once into LocalApplicationData and benchmarks per-file compression.
 /// </summary>
 [MemoryDiagnoser]
-[SimpleJob(warmupCount: 1, iterationCount: 3)]
 public class SilesiaCodecBenchmarks
 {
     private static readonly string[] CorpusNames =
@@ -35,7 +34,7 @@ public class SilesiaCodecBenchmarks
     [ParamsSource(nameof(Files))]
     public string FileName { get; set; } = "dickens";
 
-    // 0 == fastest (LZ4Codec.CompressDefault / K4os L00_FAST)
+    // 0 == fastest (LZ4Codec.CompressFast / K4os L00_FAST)
     [Params(0, 3, 6, 9, 12)]
     public int Level { get; set; }
 
@@ -56,7 +55,7 @@ public class SilesiaCodecBenchmarks
     public int LZ4SharpCompress()
     {
         if (Level == 0)
-            return LZ4Codec.CompressDefault(_input, _dest, _input.Length, _dest.Length);
+            return LZ4Codec.CompressFast(_input, _dest, _input.Length, _dest.Length);
 
         return LZ4HC.CompressHC(_input, _dest, _input.Length, _dest.Length, Level);
     }
@@ -127,7 +126,6 @@ public class SilesiaCodecBenchmarks
 }
 
 [MemoryDiagnoser]
-[SimpleJob(warmupCount: 1, iterationCount: 3)]
 public class SilesiaFramePicklerBenchmarks
 {
     private static IReadOnlyDictionary<string, byte[]> s_corpus = null!;
@@ -141,7 +139,7 @@ public class SilesiaFramePicklerBenchmarks
     [ParamsSource(nameof(Files))]
     public string FileName { get; set; } = "dickens";
 
-    // 0 == fastest (LZ4Codec.CompressDefault / K4os L00_FAST)
+    // 0 == fastest (LZ4Codec.CompressFast / K4os L00_FAST)
     [Params(0, 3, 6, 9, 12)]
     public int Level { get; set; }
 

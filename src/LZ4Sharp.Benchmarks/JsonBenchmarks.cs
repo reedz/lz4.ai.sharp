@@ -13,7 +13,6 @@ namespace LZ4Sharp.Benchmarks
     /// Processes 100 unique JSON payloads with different internal values
     /// </summary>
     [MemoryDiagnoser]
-    [SimpleJob(warmupCount: 2, iterationCount: 3)]
     public class JsonBenchmarks
     {
         private static readonly DateTime BaseDate = new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc);

@@ -8,7 +8,6 @@ using System.Linq;
 namespace LZ4Sharp.Benchmarks
 {
     [MemoryDiagnoser]
-    [SimpleJob(warmupCount: 2, iterationCount: 3)]
     public class StandardBenchmarks
     {
         private byte[] _payload = null!;

@@ -32,6 +32,8 @@ namespace LZ4Sharp
         private const int RUN_BITS = 8 - ML_BITS;
         private const int RUN_MASK = (1 << RUN_BITS) - 1;
         private const int LZ4_SKIP_TRIGGER = 6;
+        // Default acceleration factor for CompressFast (1 == normal; higher == faster, worse ratio)
+        private const int DEFAULT_ACCELERATION = 8;
         private const int HASH_LOG = 12; // Standard LZ4 hash log for small inputs
         private const int HASH_LOG_LARGE = 14; // Larger hash log for big inputs (16K entries)
         private const int HASH_SIZE = 1 << HASH_LOG;
@@ -46,7 +48,7 @@ namespace LZ4Sharp
         // Thread-local hash tables to avoid allocation overhead
         [ThreadStatic]
         private static uint[]? t_hashTable;
-        
+
         [ThreadStatic]
         private static uint[]? t_hashTableLarge;
 
@@ -60,7 +62,8 @@ namespace LZ4Sharp
         }
 
         /// <summary>
-        /// Compress data using LZ4 algorithm with maximum performance (unsafe)
+        /// Compress data using LZ4 algorithm.
+        /// NOTE: This currently uses the HC encoder at the minimum level to improve ratio.
         /// </summary>
         public static int CompressDefault(byte[] source, byte[] destination, int sourceSize, int maxDestinationSize)
         {
@@ -69,7 +72,33 @@ namespace LZ4Sharp
         }
 
         /// <summary>
-        /// Compress data using LZ4 algorithm with Span interface (unsafe internally)
+        /// Compress data using the fast (non-HC) LZ4 encoder.
+        /// Intended for "level 0 / fastest" scenarios.
+        /// </summary>
+        public static int CompressFast(byte[] source, byte[] destination, int sourceSize, int maxDestinationSize)
+            => CompressFast(source, destination, sourceSize, maxDestinationSize, DEFAULT_ACCELERATION);
+
+        /// <summary>
+        /// Compress data using the fast (non-HC) LZ4 encoder with a configurable acceleration factor.
+        /// acceleration: 1 == normal; higher == faster (worse ratio).
+        /// </summary>
+        public static int CompressFast(byte[] source, byte[] destination, int sourceSize, int maxDestinationSize, int acceleration)
+        {
+            if (source is null || destination is null || sourceSize <= 0 || maxDestinationSize <= 0)
+                return -1;
+
+            acceleration = NormalizeAcceleration(acceleration);
+
+            fixed (byte* src = source)
+            fixed (byte* dst = destination)
+            {
+                return CompressUnsafe(src, dst, sourceSize, maxDestinationSize, acceleration);
+            }
+        }
+
+        /// <summary>
+        /// Compress data using LZ4 algorithm with Span interface.
+        /// NOTE: This currently uses the HC encoder at the minimum level to improve ratio.
         /// </summary>
         public static int CompressDefault(ReadOnlySpan<byte> source, Span<byte> destination)
         {
@@ -95,25 +124,59 @@ namespace LZ4Sharp
         }
 
         /// <summary>
+        /// Compress data using the fast (non-HC) LZ4 encoder.
+        /// Intended for "level 0 / fastest" scenarios.
+        /// </summary>
+        public static int CompressFast(ReadOnlySpan<byte> source, Span<byte> destination)
+            => CompressFast(source, destination, DEFAULT_ACCELERATION);
+
+        /// <summary>
+        /// Compress data using the fast (non-HC) LZ4 encoder with a configurable acceleration factor.
+        /// acceleration: 1 == normal; higher == faster (worse ratio).
+        /// </summary>
+        public static int CompressFast(ReadOnlySpan<byte> source, Span<byte> destination, int acceleration)
+        {
+            if (source.Length <= 0 || destination.Length <= 0)
+                return -1;
+
+            acceleration = NormalizeAcceleration(acceleration);
+
+            fixed (byte* src = source)
+            fixed (byte* dst = destination)
+            {
+                return CompressUnsafe(src, dst, source.Length, destination.Length, acceleration);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static int NormalizeAcceleration(int acceleration) => acceleration < 1 ? 1 : acceleration;
+
+        /// <summary>
         /// Core unsafe compression implementation
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         private static int CompressUnsafe(byte* source, byte* dest, int inputSize, int maxOutputSize)
+            => CompressUnsafe(source, dest, inputSize, maxOutputSize, DEFAULT_ACCELERATION);
+
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        private static int CompressUnsafe(byte* source, byte* dest, int inputSize, int maxOutputSize, int acceleration)
         {
             if (inputSize < MFLIMIT)
             {
                 return CompressSmallUnsafe(source, dest, inputSize, maxOutputSize);
             }
 
+            acceleration = NormalizeAcceleration(acceleration);
+
             // Optimization 2A: Separate compression paths to eliminate branch in hot loop
             // Use 5-byte hash for larger inputs (>= 64KB) like K4os does
             if (inputSize >= LZ4_64Klimit)
             {
-                return CompressLargeInput(source, dest, inputSize, maxOutputSize);
+                return CompressLargeInput(source, dest, inputSize, maxOutputSize, acceleration);
             }
             else
             {
-                return CompressMediumInput(source, dest, inputSize, maxOutputSize);
+                return CompressMediumInput(source, dest, inputSize, maxOutputSize, acceleration);
             }
         }
 
@@ -121,7 +184,7 @@ namespace LZ4Sharp
         /// Compression for medium inputs (&lt;64KB) using 4-byte hash - no branch in hot loop
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-        private static int CompressMediumInput(byte* source, byte* dest, int inputSize, int maxOutputSize)
+        private static int CompressMediumInput(byte* source, byte* dest, int inputSize, int maxOutputSize, int acceleration)
         {
             byte* ip = source;
             byte* ibase = source;
@@ -136,13 +199,15 @@ namespace LZ4Sharp
 
             // Use thread-local hash table to avoid allocation overhead
             uint[] hashTableArray = t_hashTable ??= new uint[HASH_SIZE];
-            // Optimization 1C: Use Span.Clear which is SIMD-accelerated
-            hashTableArray.AsSpan(0, HASH_SIZE).Clear();
             
+            // Clear hash table - faster than epoch tracking for hot loop
+            Array.Clear(hashTableArray);
+
             fixed (uint* hashTable = hashTableArray)
             {
                 // First byte - use Hash4 directly (no branch)
-                hashTable[Hash4(ip)] = (uint)(ip - ibase);
+                uint h0 = Hash4(ip);
+                hashTable[h0] = (uint)(ip - ibase);
                 ip++;
                 uint forwardH = Hash4(ip);
 
@@ -156,7 +221,7 @@ namespace LZ4Sharp
                         {
                             byte* forwardIp = ip;
                             int step = 1;
-                            int searchMatchNb = 1 << LZ4_SKIP_TRIGGER;
+                            int searchMatchNb = acceleration << LZ4_SKIP_TRIGGER;
 
                             do
                             {
@@ -170,16 +235,13 @@ namespace LZ4Sharp
 
                                 match = ibase + hashTable[h];
                                 
-                                // Prefetch next hash entry
+                                // Compute next hash
                                 forwardH = Hash4(forwardIp);
-                                if (Sse.IsSupported)
-                                {
-                                    Sse.Prefetch0(&hashTable[forwardH]);
-                                }
                                 
                                 hashTable[h] = (uint)(ip - ibase);
                             }
-                            while ((match + LZ4_DISTANCE_MAX < ip) || (Peek4(match) != Peek4(ip)));
+                            // Check content match first (common rejection), then distance
+                            while ((Peek4(match) != Peek4(ip)) || (ip - match > LZ4_DISTANCE_MAX));
                         }
 
                         // Catch up: check if we can extend the match backwards
@@ -269,7 +331,8 @@ namespace LZ4Sharp
                             break;
 
                         // Fill table - use Hash4 directly
-                        hashTable[Hash4(ip - 2)] = (uint)(ip - 2 - ibase);
+                        uint h2 = Hash4(ip - 2);
+                        hashTable[h2] = (uint)(ip - 2 - ibase);
 
                         // Test next position
                         {
@@ -277,7 +340,7 @@ namespace LZ4Sharp
                             match = ibase + hashTable[h];
                             hashTable[h] = (uint)(ip - ibase);
 
-                            if ((match + LZ4_DISTANCE_MAX >= ip) && (Peek4(match) == Peek4(ip)))
+                            if ((Peek4(match) == Peek4(ip)) && (ip - match <= LZ4_DISTANCE_MAX))
                             {
                                 token = op++;
                                 *token = 0;
@@ -324,7 +387,7 @@ namespace LZ4Sharp
         /// Compression for large inputs (>=64KB) using 5-byte hash with larger hash table
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-        private static int CompressLargeInput(byte* source, byte* dest, int inputSize, int maxOutputSize)
+        private static int CompressLargeInput(byte* source, byte* dest, int inputSize, int maxOutputSize, int acceleration)
         {
             byte* ip = source;
             byte* ibase = source;
@@ -337,14 +400,17 @@ namespace LZ4Sharp
 
             byte* anchor = source;
 
-            // Use dedicated large hash table with fast SIMD clear
+            // Use dedicated large hash table.
             uint[] hashTableArray = t_hashTableLarge ??= new uint[HASH_SIZE_LARGE];
-            hashTableArray.AsSpan(0, HASH_SIZE_LARGE).Clear();
             
+            // Clear hash table - faster than epoch tracking for hot loop
+            Array.Clear(hashTableArray);
+
             fixed (uint* hashTable = hashTableArray)
             {
                 // First byte - use Hash5Large directly
-                hashTable[Hash5Large(ip)] = (uint)(ip - ibase);
+                uint h0 = Hash5Large(ip);
+                hashTable[h0] = (uint)(ip - ibase);
                 ip++;
                 uint forwardH = Hash5Large(ip);
 
@@ -358,7 +424,7 @@ namespace LZ4Sharp
                         {
                             byte* forwardIp = ip;
                             int step = 1;
-                            int searchMatchNb = 1 << LZ4_SKIP_TRIGGER;
+                            int searchMatchNb = acceleration << LZ4_SKIP_TRIGGER;
 
                             do
                             {
@@ -374,14 +440,11 @@ namespace LZ4Sharp
                                 
                                 // Compute next hash
                                 forwardH = Hash5Large(forwardIp);
-                                if (Sse.IsSupported)
-                                {
-                                    Sse.Prefetch0(&hashTable[forwardH]);
-                                }
                                 
                                 hashTable[h] = (uint)(ip - ibase);
                             }
-                            while ((match + LZ4_DISTANCE_MAX < ip) || (Peek4(match) != Peek4(ip)));
+                            // Check content match first (common rejection), then distance
+                            while ((Peek4(match) != Peek4(ip)) || (ip - match > LZ4_DISTANCE_MAX));
                         }
 
                         // Catch up: check if we can extend the match backwards
@@ -471,7 +534,8 @@ namespace LZ4Sharp
                             break;
 
                         // Fill table - use Hash5Large
-                        hashTable[Hash5Large(ip - 2)] = (uint)(ip - 2 - ibase);
+                        uint h2 = Hash5Large(ip - 2);
+                        hashTable[h2] = (uint)(ip - 2 - ibase);
 
                         // Test next position
                         {
@@ -479,7 +543,7 @@ namespace LZ4Sharp
                             match = ibase + hashTable[h];
                             hashTable[h] = (uint)(ip - ibase);
 
-                            if ((match + LZ4_DISTANCE_MAX >= ip) && (Peek4(match) == Peek4(ip)))
+                            if ((Peek4(match) == Peek4(ip)) && (ip - match <= LZ4_DISTANCE_MAX))
                             {
                                 token = op++;
                                 *token = 0;
@@ -667,12 +731,17 @@ namespace LZ4Sharp
                         match -= Dec64Table[offset];
                         op += 8;
 
-                        // Continue with overlapping copy using 8-byte chunks
-                        while (op < cpy)
+                        // Continue with overlapping copy using tail optimization
+                        while (op + 8 <= cpy)
                         {
                             Poke8(op, Peek8(match));
                             op += 8;
                             match += 8;
+                        }
+                        if (op < cpy)
+                        {
+                            // Final overlapping 8-byte write
+                            Poke8(cpy - 8, Peek8(match + (cpy - op) - 8));
                         }
                         op = cpy;
                     }
@@ -687,11 +756,17 @@ namespace LZ4Sharp
                             {
                                 op += 16;
                                 match += 16;
-                                while (op < cpy)
+                                // Use overlapping write for tail
+                                while (op + 8 <= cpy)
                                 {
                                     Poke8(op, Peek8(match));
                                     op += 8;
                                     match += 8;
+                                }
+                                if (op < cpy)
+                                {
+                                    // Final overlapping 8-byte write to cover remainder
+                                    Poke8(cpy - 8, Peek8(match + (cpy - op) - 8));
                                 }
                             }
                         }
@@ -819,12 +894,17 @@ namespace LZ4Sharp
                     match -= Dec64Table[offset];
                     op += 8;
 
-                    // Continue with overlapping copy
-                    while (op < cpy)
+                    // Continue with overlapping copy using tail optimization
+                    while (op + 8 <= cpy)
                     {
                         Poke8(op, Peek8(match));
                         op += 8;
                         match += 8;
+                    }
+                    if (op < cpy)
+                    {
+                        // Final overlapping 8-byte write
+                        Poke8(cpy - 8, Peek8(match + (cpy - op) - 8));
                     }
                     op = cpy;
                 }
@@ -839,11 +919,17 @@ namespace LZ4Sharp
                         {
                             op += 16;
                             match += 16;
-                            while (op < cpy)
+                            // Use overlapping write for tail
+                            while (op + 8 <= cpy)
                             {
                                 Poke8(op, Peek8(match));
                                 op += 8;
                                 match += 8;
+                            }
+                            if (op < cpy)
+                            {
+                                // Final overlapping 8-byte write to cover remainder
+                                Poke8(cpy - 8, Peek8(match + (cpy - op) - 8));
                             }
                         }
                     }
@@ -870,7 +956,6 @@ namespace LZ4Sharp
             uint v = Peek4(p);
             if (Sse42.IsSupported)
             {
-                // CRC32 provides excellent hash distribution and is very fast on modern CPUs
                 return Sse42.Crc32(0, v) >> (32 - HASH_LOG);
             }
             return (v * HASH_MULT_4) >> (32 - HASH_LOG);
@@ -897,7 +982,6 @@ namespace LZ4Sharp
             ulong sequence = Peek8(p);
             if (Sse42.X64.IsSupported)
             {
-                // CRC32 on 64-bit value for excellent distribution
                 return (uint)(Sse42.X64.Crc32(0, sequence) >> (32 - HASH_LOG_LARGE));
             }
             return (uint)(unchecked((sequence << 24) * HASH_MULT_5) >> (64 - HASH_LOG_LARGE));
@@ -1144,12 +1228,12 @@ namespace LZ4Sharp
                 }
             }
             
-            // Handle remaining bytes with 8-byte copies
-            while (dst < dstEnd)
+            // Handle remaining bytes with overlapping 8-byte write
+            // This eliminates loop overhead for the tail (1-7 bytes)
+            if (dst < dstEnd)
             {
-                Copy8(dst, src);
-                dst += 8;
-                src += 8;
+                // Use overlapping write: write last 8 bytes which covers any remainder
+                Copy8(dstEnd - 8, src + (dstEnd - dst) - 8);
             }
         }
 
