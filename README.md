@@ -51,9 +51,19 @@ int compressedSize = LZ4HC.CompressHC(input, compressed, input.Length, compresse
 See [BENCHMARKS.md](BENCHMARKS.md) for detailed performance results on JSON and Silesia corpus datasets.
 
 **Highlights** (Intel N100, .NET 10):
-- JSON data: **0.46-0.91x** vs K4os.LZ4 (competitive to faster on small payloads)
-- Silesia corpus: **0.75-1.18x** vs K4os.LZ4 (comparable performance)
-- Compression ratios: **Matches reference implementation**
+- JSON dataset: ratios **0.29–0.77** vs K4os (**1.3x–3.4x faster**)
+- Silesia corpus (accel=1): ratios **0.09–1.00** vs K4os (**up to 11.1x faster**)
+- Silesia: faster in **11/12** files at accel=1
+- Compression ratios: **Match the reference implementation**
+
+## Testing
+
+The test suite includes:
+- **Unit Tests** — Comprehensive algorithm correctness tests
+- **Compatibility Tests** — Cross-validation with K4os.Compression.LZ4 to ensure interoperability
+- **Round-trip Tests** — Compression/decompression verification
+
+All tests verify that LZ4Sharp produces output compatible with other LZ4 implementations.
 
 ## Development
 
