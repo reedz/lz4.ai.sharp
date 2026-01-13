@@ -54,8 +54,9 @@ Source: `JsonDatasetLevel0Benchmarks` (payload buckets: `<10kb`, `<100kb`, `<1mb
 | 16 | 61.708 ms | 30.181 ms | 0.49 | 0.121 | 0.128 |
 
 ## Silesia corpus (fast compression)
-Source: `SilesiaCodecLevel0Benchmarks` (acceleration **1**).
+Source: `SilesiaCodecLevel0Benchmarks`.
 
+### Acceleration 1
 | File | K4os Mean | LZ4Sharp Mean | Ratio (LZ4Sharp/K4os) | K4os CRatio | LZ4Sharp CRatio |
 |------|----------:|--------------:|----------------------:|------------:|----------------:|
 | dickens | 45.391 ms | 35.798 ms | 0.79 | 0.631 | 0.696 |
@@ -71,8 +72,74 @@ Source: `SilesiaCodecLevel0Benchmarks` (acceleration **1**).
 | x-ray | 13.509 ms | 1.271 ms | 0.09 | 0.990 | 1.004 |
 | xml | 9.901 ms | 8.653 ms | 0.87 | 0.230 | 0.218 |
 
+### Acceleration 2
+| File | K4os Mean | LZ4Sharp Mean | Ratio (LZ4Sharp/K4os) | K4os CRatio | LZ4Sharp CRatio |
+|------|----------:|--------------:|----------------------:|------------:|----------------:|
+| dickens | 43.935 ms | 27.207 ms | 0.62 | 0.631 | 0.757 |
+| mozilla | 140.720 ms | 97.927 ms | 0.70 | 0.516 | 0.567 |
+| mr | 28.835 ms | 16.342 ms | 0.57 | 0.546 | 0.607 |
+| nci | 48.409 ms | 46.016 ms | 0.95 | 0.165 | 0.161 |
+| ooffice | 22.337 ms | 10.757 ms | 0.48 | 0.705 | 0.798 |
+| osdb | 32.734 ms | 21.801 ms | 0.67 | 0.521 | 0.561 |
+| reymont | 25.079 ms | 21.455 ms | 0.86 | 0.480 | 0.511 |
+| samba | 51.103 ms | 40.217 ms | 0.79 | 0.357 | 0.400 |
+| sao | 29.524 ms | 9.349 ms | 0.32 | 0.936 | 0.978 |
+| webster | 155.387 ms | 108.726 ms | 0.70 | 0.486 | 0.546 |
+| x-ray | 14.228 ms | 1.311 ms | 0.09 | 0.990 | 1.004 |
+| xml | 10.337 ms | 8.430 ms | 0.82 | 0.230 | 0.231 |
+
+### Acceleration 4
+| File | K4os Mean | LZ4Sharp Mean | Ratio (LZ4Sharp/K4os) | K4os CRatio | LZ4Sharp CRatio |
+|------|----------:|--------------:|----------------------:|------------:|----------------:|
+| dickens | 44.892 ms | 20.361 ms | 0.45 | 0.631 | 0.839 |
+| mozilla | 147.866 ms | 86.108 ms | 0.58 | 0.516 | 0.593 |
+| mr | 29.634 ms | 13.067 ms | 0.44 | 0.546 | 0.638 |
+| nci | 50.063 ms | 46.041 ms | 0.92 | 0.165 | 0.169 |
+| ooffice | 23.414 ms | 8.069 ms | 0.34 | 0.705 | 0.835 |
+| osdb | 34.936 ms | 20.137 ms | 0.58 | 0.521 | 0.604 |
+| reymont | 26.533 ms | 20.279 ms | 0.76 | 0.480 | 0.568 |
+| samba | 55.467 ms | 36.921 ms | 0.67 | 0.357 | 0.438 |
+| sao | 29.428 ms | 5.406 ms | 0.18 | 0.936 | 0.996 |
+| webster | 152.474 ms | 94.882 ms | 0.62 | 0.486 | 0.594 |
+| x-ray | 13.666 ms | 1.285 ms | 0.09 | 0.990 | 1.004 |
+| xml | 10.310 ms | 7.587 ms | 0.74 | 0.230 | 0.248 |
+
+### Acceleration 8
+| File | K4os Mean | LZ4Sharp Mean | Ratio (LZ4Sharp/K4os) | K4os CRatio | LZ4Sharp CRatio |
+|------|----------:|--------------:|----------------------:|------------:|----------------:|
+| dickens | 45.030 ms | 11.959 ms | 0.27 | 0.631 | 0.921 |
+| mozilla | 144.345 ms | 69.375 ms | 0.48 | 0.516 | 0.639 |
+| mr | 29.797 ms | 8.736 ms | 0.29 | 0.546 | 0.673 |
+| nci | 49.163 ms | 42.528 ms | 0.87 | 0.165 | 0.182 |
+| ooffice | 22.757 ms | 5.413 ms | 0.24 | 0.705 | 0.876 |
+| osdb | 33.519 ms | 15.837 ms | 0.47 | 0.521 | 0.687 |
+| reymont | 25.069 ms | 16.196 ms | 0.65 | 0.480 | 0.661 |
+| samba | 51.921 ms | 29.204 ms | 0.56 | 0.357 | 0.500 |
+| sao | 28.410 ms | 3.467 ms | 0.12 | 0.936 | 1.001 |
+| webster | 151.577 ms | 75.728 ms | 0.50 | 0.486 | 0.658 |
+| x-ray | 13.104 ms | 1.237 ms | 0.09 | 0.990 | 1.004 |
+| xml | 10.217 ms | 6.886 ms | 0.67 | 0.230 | 0.277 |
+
+### Acceleration 16
+| File | K4os Mean | LZ4Sharp Mean | Ratio (LZ4Sharp/K4os) | K4os CRatio | LZ4Sharp CRatio |
+|------|----------:|--------------:|----------------------:|------------:|----------------:|
+| dickens | 44.049 ms | 6.709 ms | 0.15 | 0.631 | 0.972 |
+| mozilla | 143.671 ms | 49.034 ms | 0.34 | 0.516 | 0.733 |
+| mr | 28.769 ms | 6.014 ms | 0.21 | 0.546 | 0.700 |
+| nci | 48.873 ms | 40.619 ms | 0.83 | 0.165 | 0.213 |
+| ooffice | 22.421 ms | 3.503 ms | 0.16 | 0.705 | 0.917 |
+| osdb | 33.304 ms | 10.014 ms | 0.30 | 0.521 | 0.853 |
+| reymont | 25.254 ms | 11.375 ms | 0.45 | 0.480 | 0.784 |
+| samba | 51.532 ms | 23.220 ms | 0.45 | 0.357 | 0.578 |
+| sao | 28.117 ms | 2.409 ms | 0.09 | 0.936 | 1.003 |
+| webster | 152.285 ms | 59.705 ms | 0.39 | 0.486 | 0.729 |
+| x-ray | 13.529 ms | 1.270 ms | 0.09 | 0.990 | 1.004 |
+| xml | 9.972 ms | 6.065 ms | 0.61 | 0.230 | 0.320 |
+
 ## Summary
-- JSON dataset: ratios **0.29–0.77** (speedup **1.3x–3.4x** vs K4os).
-- Silesia (accel=1): ratios **0.09–1.00** (speedup **1.0x–11.1x** vs K4os); faster in **11/12** files.
+- **JSON dataset**: LZ4Sharp is significantly faster across all payload sizes (0.29–0.77 ratio).
+- **Silesia corpus**:
+  - At **Accel 1**, LZ4Sharp is faster (0.09–1.00 ratio) with competitive compression ratios.
+  - At **higher acceleration**, LZ4Sharp gains massive speedups (e.g., up to ~10x faster at Accel 16) but trades off compression ratio, offering a flexible performance profile.
 
 Detailed BenchmarkDotNet outputs: `BenchmarkDotNet.Artifacts/results/`.
