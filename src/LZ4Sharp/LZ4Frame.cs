@@ -59,6 +59,11 @@ namespace LZ4Sharp
             public BlockSize BlockSizeId { get; set; } = BlockSize.Default;
             public BlockMode BlockMode { get; set; } = BlockMode.Linked;
             public ContentChecksum ContentChecksumFlag { get; set; } = ContentChecksum.NoChecksum;
+            /// <summary>
+            /// Compression level. Negative values use fast compression (CompressFast) where the
+            /// magnitude is the acceleration factor (-1 = accel 1, -2 = accel 2, etc.).
+            /// Values 0-2 use HC compression at minimum level. Values 3+ use HC at specified level.
+            /// </summary>
             public int CompressionLevel { get; set; } = 0;
             public bool AutoFlush { get; set; } = false;
 
@@ -131,7 +136,13 @@ namespace LZ4Sharp
                     int maxCompressedSize = LZ4Codec.CompressBound(currentBlockSize);
 
                     int compressedSize;
-                    if (prefs.CompressionLevel >= LZ4HC.CLEVEL_MIN)
+                    if (prefs.CompressionLevel < 0)
+                    {
+                        // Negative levels use fast compression; magnitude maps to acceleration factor
+                        int acceleration = -prefs.CompressionLevel;
+                        compressedSize = LZ4Codec.CompressFast(tempSrc, compressedBlock, currentBlockSize, maxCompressedSize, acceleration);
+                    }
+                    else if (prefs.CompressionLevel >= LZ4HC.CLEVEL_MIN)
                     {
                         compressedSize = LZ4HC.CompressHC(tempSrc, compressedBlock, currentBlockSize, maxCompressedSize, prefs.CompressionLevel);
                     }
