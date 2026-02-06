@@ -25,6 +25,7 @@ public class FrameK4osInteropTest
     [InlineData(0)]
     [InlineData(3)]
     [InlineData(9)]
+    [InlineData(12)]
     public void LZ4SharpFrame_K4osDecompress_AllLevels(int level)
     {
         var testData = Encoding.UTF8.GetBytes(string.Concat(Enumerable.Repeat("Hello World! Test data. ", 100)));
@@ -110,6 +111,36 @@ public class FrameK4osInteropTest
         
         Assert.Equal(size, result.Length);
         Assert.True(testData.SequenceEqual(result), "Decompressed data should match original");
+    }
+
+    [Theory]
+    [InlineData(K4os.Compression.LZ4.LZ4Level.L00_FAST, 100)]
+    [InlineData(K4os.Compression.LZ4.LZ4Level.L00_FAST, 10000)]
+    [InlineData(K4os.Compression.LZ4.LZ4Level.L00_FAST, 100000)]
+    [InlineData(K4os.Compression.LZ4.LZ4Level.L00_FAST, 300000)]
+    [InlineData(K4os.Compression.LZ4.LZ4Level.L03_HC, 100000)]
+    [InlineData(K4os.Compression.LZ4.LZ4Level.L09_HC, 100000)]
+    [InlineData(K4os.Compression.LZ4.LZ4Level.L12_MAX, 100000)]
+    public void K4osFrame_LZ4SharpDecompress_VariousLevelsAndSizes(K4os.Compression.LZ4.LZ4Level level, int size)
+    {
+        var testData = new byte[size];
+        for (int i = 0; i < size; i++)
+            testData[i] = (byte)((i * 7 + 13) % 256);
+
+        // Compress with K4os LZ4Stream (frame format)
+        using var compressedStream = new MemoryStream();
+        using (var encoder = LZ4Stream.Encode(compressedStream, level, leaveOpen: true))
+        {
+            encoder.Write(testData);
+        }
+        var compressed = compressedStream.ToArray();
+
+        // Decompress with LZ4Sharp LZ4Frame
+        var decompressed = new byte[size];
+        int decompressedSize = LZ4Frame.DecompressFrame(decompressed, decompressed.Length, compressed, compressed.Length);
+
+        Assert.Equal(size, decompressedSize);
+        Assert.True(testData.SequenceEqual(decompressed), $"Decompressed data should match original (level={level}, size={size})");
     }
 }
 

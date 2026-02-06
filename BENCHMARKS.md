@@ -136,10 +136,79 @@ Source: `SilesiaCodecLevel0Benchmarks`.
 | x-ray | 13.529 ms | 1.270 ms | 0.09 | 0.990 | 1.004 |
 | xml | 9.972 ms | 6.065 ms | 0.61 | 0.230 | 0.320 |
 
+## Streaming API (LZ4Stream)
+
+Streaming compression and decompression results for **LZ4Sharp** vs **K4os.Compression.LZ4.Streams**.
+Source: `StreamBenchmarks` (JSON dataset corpus, payload buckets: `<10kb`, `<100kb`, `<1mb`, `>1mb`).
+
+### Compress
+| Payload | Level | K4os Mean | LZ4Sharp Mean | Ratio (LZ4Sharp/K4os) |
+|---------|------:|----------:|--------------:|----------------------:|
+| <10kb | -1 | 4.519 ms | 3.186 ms | 0.71 |
+| <10kb | 3 | 17.274 ms | 7.293 ms | 0.42 |
+| <10kb | 9 | 17.722 ms | 7.086 ms | 0.40 |
+| <10kb | 12 | 63.589 ms | 7.106 ms | 0.11 |
+| <100kb | -1 | 24.671 ms | 18.734 ms | 0.76 |
+| <100kb | 3 | 94.246 ms | 56.150 ms | 0.60 |
+| <100kb | 9 | 112.347 ms | 62.774 ms | 0.56 |
+| <100kb | 12 | 245.959 ms | 66.015 ms | 0.27 |
+| <1mb | -1 | 110.925 ms | 88.947 ms | 0.80 |
+| <1mb | 3 | 720.394 ms | 358.693 ms | 0.50 |
+| <1mb | 9 | 1,241.569 ms | 520.370 ms | 0.42 |
+| <1mb | 12 | 2,753.766 ms | 563.367 ms | 0.20 |
+| >1mb | -1 | 121.481 ms | 87.881 ms | 0.72 |
+| >1mb | 3 | 823.916 ms | 373.890 ms | 0.45 |
+| >1mb | 9 | 1,387.571 ms | 537.022 ms | 0.39 |
+| >1mb | 12 | 2,772.089 ms | 540.971 ms | 0.20 |
+
+### Decompress
+| Payload | Level | K4os Mean | LZ4Sharp Mean | Ratio (LZ4Sharp/K4os) |
+|---------|------:|----------:|--------------:|----------------------:|
+| <10kb | -1 | 3.682 ms | 2.866 ms | 0.63 |
+| <10kb | 3 | 3.694 ms | 2.946 ms | 0.17 |
+| <10kb | 9 | 3.738 ms | 2.840 ms | 0.16 |
+| <10kb | 12 | 3.731 ms | 2.822 ms | 0.04 |
+| <100kb | -1 | 23.951 ms | 19.996 ms | 0.81 |
+| <100kb | 3 | 23.391 ms | 20.284 ms | 0.22 |
+| <100kb | 9 | 22.765 ms | 20.082 ms | 0.18 |
+| <100kb | 12 | 23.870 ms | 26.791 ms | 0.11 |
+| <1mb | -1 | 170.176 ms | 162.620 ms | 0.96 |
+| <1mb | 3 | 178.743 ms | 153.415 ms | 0.86 |
+| <1mb | 9 | 188.591 ms | 153.580 ms | 0.81 |
+| <1mb | 12 | 162.773 ms | 173.642 ms | 1.07 |
+| >1mb | -1 | 224.865 ms | 182.758 ms | 0.81 |
+| >1mb | 3 | 242.327 ms | 226.333 ms | 0.93 |
+| >1mb | 9 | 234.785 ms | 237.162 ms | 1.01 |
+| >1mb | 12 | 238.038 ms | 212.047 ms | 0.89 |
+
+### Roundtrip (compress + decompress)
+| Payload | Level | K4os Mean | LZ4Sharp Mean | Ratio (LZ4Sharp/K4os) |
+|---------|------:|----------:|--------------:|----------------------:|
+| <10kb | -1 | 8.679 ms | 6.253 ms | 0.72 |
+| <10kb | 3 | 21.483 ms | 9.967 ms | 0.46 |
+| <10kb | 9 | 21.244 ms | 10.558 ms | 0.50 |
+| <10kb | 12 | 71.285 ms | 10.496 ms | 0.15 |
+| <100kb | -1 | 48.441 ms | 36.171 ms | 0.75 |
+| <100kb | 3 | 120.248 ms | 78.144 ms | 0.65 |
+| <100kb | 9 | 133.818 ms | 86.140 ms | 0.64 |
+| <100kb | 12 | 285.862 ms | 88.711 ms | 0.31 |
+| <1mb | -1 | 271.932 ms | 242.041 ms | 0.89 |
+| <1mb | 3 | 899.574 ms | 493.646 ms | 0.55 |
+| <1mb | 9 | 1,402.800 ms | 669.447 ms | 0.48 |
+| <1mb | 12 | 2,662.314 ms | 707.782 ms | 0.27 |
+| >1mb | -1 | 337.367 ms | 322.546 ms | 0.96 |
+| >1mb | 3 | 1,050.760 ms | 602.682 ms | 0.57 |
+| >1mb | 9 | 1,654.254 ms | 763.550 ms | 0.46 |
+| >1mb | 12 | 3,030.831 ms | 816.474 ms | 0.27 |
+
 ## Summary
-- **JSON dataset**: LZ4Sharp is significantly faster across all payload sizes (0.29–0.77 ratio).
+- **JSON dataset (codec)**: LZ4Sharp is significantly faster across all payload sizes (0.29–0.77 ratio).
 - **Silesia corpus**:
   - At **Accel 1**, LZ4Sharp is faster (0.09–1.00 ratio) with competitive compression ratios.
   - At **higher acceleration**, LZ4Sharp gains massive speedups (e.g., up to ~10x faster at Accel 16) but trades off compression ratio, offering a flexible performance profile.
+- **Streaming API**:
+  - **Compress**: LZ4Sharp is 1.2–9× faster. The advantage grows dramatically at HC levels (up to **5× faster** at HC12 for large payloads).
+  - **Decompress**: LZ4Sharp is comparable to slightly faster (0.8–1.0× for fast; roughly on par at HC levels).
+  - **Roundtrip**: LZ4Sharp is 1.0–6.8× faster end-to-end, dominated by the compression advantage.
 
 Detailed BenchmarkDotNet outputs: `BenchmarkDotNet.Artifacts/results/`.
