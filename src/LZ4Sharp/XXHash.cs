@@ -289,5 +289,29 @@ namespace LZ4Sharp
                 return XXH32_Finalize(h32, _memory, 0, _memorySize);
             }
         }
+
+        /// <summary>
+        /// Reset the state with a new seed (static helper)
+        /// </summary>
+        public static void XXH32Reset(XXH32State state, uint seed)
+        {
+            state.Reset(seed);
+        }
+
+        /// <summary>
+        /// Update the hash with more data (static helper)
+        /// </summary>
+        public static void XXH32Update(XXH32State state, ReadOnlySpan<byte> input)
+        {
+            state.Update(input.ToArray(), 0, input.Length);
+        }
+
+        /// <summary>
+        /// Get the final hash value (static helper)
+        /// </summary>
+        public static uint XXH32Digest(XXH32State state)
+        {
+            return state.Digest();
+        }
     }
 }

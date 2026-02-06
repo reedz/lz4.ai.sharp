@@ -239,8 +239,10 @@ namespace LZ4Sharp
             flg |= (byte)((int)prefs.ContentChecksumFlag << 2);
             destination[dstPos++] = flg;
 
-            // BD byte
-            byte bd = (byte)((int)prefs.BlockSizeId << 4);
+            // BD byte - BlockMaxSize must be 4-7 per LZ4 frame spec
+            // Default (0) maps to Max64KB (4) for frame encoding
+            int blockSizeIdForHeader = prefs.BlockSizeId == BlockSize.Default ? (int)BlockSize.Max64KB : (int)prefs.BlockSizeId;
+            byte bd = (byte)(blockSizeIdForHeader << 4);
             destination[dstPos++] = bd;
 
             // Header checksum (XXH32 of FLG and BD bytes, bits 15-8)
