@@ -5,6 +5,7 @@
 
 using System;
 using System.Buffers;
+using System.Buffers.Binary;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -29,6 +30,8 @@ namespace LZ4Sharp.Streams
         private bool _headerRead;
         private bool _endOfFrame;
         private bool _disposed;
+        private readonly byte[] _asyncHeaderBuf = new byte[4];
+        private readonly byte[] _asyncFrameHeaderBuf = new byte[19];
 
         // Frame descriptor from header
         private bool _blockIndependence;
@@ -136,7 +139,25 @@ namespace LZ4Sharp.Streams
                     continue;
                 }
 
-                // Need to read and decompress another block
+                // If user buffer can hold a full block, decompress directly into it
+                int remaining = buffer.Length - totalRead;
+                if (remaining >= _blockMaxSize)
+                {
+                    int directLen = ReadNextBlockDirect(buffer.Slice(totalRead, _blockMaxSize));
+                    if (directLen < 0)
+                    {
+                        _endOfFrame = true;
+                        break;
+                    }
+                    totalRead += directLen;
+
+                    if (_interactive && totalRead > 0)
+                        return totalRead;
+
+                    continue;
+                }
+
+                // Need to read and decompress into intermediate buffer
                 if (!ReadNextBlock())
                 {
                     _endOfFrame = true;
@@ -208,7 +229,7 @@ namespace LZ4Sharp.Streams
 
             // Read magic number (4 bytes)
             ReadExact(header.Slice(0, 4));
-            uint magic = (uint)(header[0] | (header[1] << 8) | (header[2] << 16) | (header[3] << 24));
+            uint magic = BinaryPrimitives.ReadUInt32LittleEndian(header);
             if (magic != LZ4F_MAGICNUMBER)
                 throw new InvalidDataException($"Invalid LZ4 frame magic number: 0x{magic:X8}");
             pos = 4;
@@ -258,7 +279,7 @@ namespace LZ4Sharp.Streams
 
             // Verify header checksum
             int headerDataLen = _contentSizePresent ? 10 : 2;
-            uint calculatedChecksum = XXHash.XXH32(header.Slice(4, headerDataLen).ToArray(), headerDataLen, 0);
+            uint calculatedChecksum = XXHash.XXH32((ReadOnlySpan<byte>)header.Slice(4, headerDataLen), 0);
             if (((calculatedChecksum >> 8) & 0xFF) != storedHC)
                 throw new InvalidDataException("Invalid header checksum");
 
@@ -277,12 +298,12 @@ namespace LZ4Sharp.Streams
 
         private async ValueTask ReadFrameHeaderAsync(CancellationToken cancellationToken)
         {
-            byte[] header = new byte[19];
+            byte[] header = _asyncFrameHeaderBuf;
             int pos = 0;
 
             // Read magic number
             await ReadExactAsync(header.AsMemory(0, 4), cancellationToken).ConfigureAwait(false);
-            uint magic = (uint)(header[0] | (header[1] << 8) | (header[2] << 16) | (header[3] << 24));
+            uint magic = BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan());
             if (magic != LZ4F_MAGICNUMBER)
                 throw new InvalidDataException($"Invalid LZ4 frame magic number: 0x{magic:X8}");
             pos = 4;
@@ -332,7 +353,7 @@ namespace LZ4Sharp.Streams
 
             // Verify header checksum
             int headerDataLen = _contentSizePresent ? 10 : 2;
-            uint calculatedChecksum = XXHash.XXH32(header.AsSpan(4, headerDataLen).ToArray(), headerDataLen, 0);
+            uint calculatedChecksum = XXHash.XXH32((ReadOnlySpan<byte>)header.AsSpan(4, headerDataLen), 0);
             if (((calculatedChecksum >> 8) & 0xFF) != storedHC)
                 throw new InvalidDataException("Invalid header checksum");
 
@@ -356,7 +377,7 @@ namespace LZ4Sharp.Streams
             if (!TryReadExact(blockHeader))
                 throw new InvalidDataException("Unexpected end of stream while reading block header");
 
-            uint blockHeaderValue = (uint)(blockHeader[0] | (blockHeader[1] << 8) | (blockHeader[2] << 16) | (blockHeader[3] << 24));
+            uint blockHeaderValue = BinaryPrimitives.ReadUInt32LittleEndian(blockHeader);
 
             // Check for end mark
             if (blockHeaderValue == 0)
@@ -366,7 +387,7 @@ namespace LZ4Sharp.Streams
                 {
                     Span<byte> checksumBytes = stackalloc byte[4];
                     ReadExact(checksumBytes);
-                    uint storedChecksum = (uint)(checksumBytes[0] | (checksumBytes[1] << 8) | (checksumBytes[2] << 16) | (checksumBytes[3] << 24));
+                    uint storedChecksum = BinaryPrimitives.ReadUInt32LittleEndian(checksumBytes);
                     uint calculatedChecksum = XXHash.XXH32Digest(_contentChecksumState!);
                     if (storedChecksum != calculatedChecksum)
                         throw new InvalidDataException("Content checksum mismatch");
@@ -388,7 +409,7 @@ namespace LZ4Sharp.Streams
             {
                 Span<byte> checksumBytes = stackalloc byte[4];
                 ReadExact(checksumBytes);
-                uint storedChecksum = (uint)(checksumBytes[0] | (checksumBytes[1] << 8) | (checksumBytes[2] << 16) | (checksumBytes[3] << 24));
+                uint storedChecksum = BinaryPrimitives.ReadUInt32LittleEndian(checksumBytes);
                 uint calculatedChecksum = XXHash.XXH32(_compressedBlockBuffer!, blockSize, 0);
                 if (storedChecksum != calculatedChecksum)
                     throw new InvalidDataException("Block checksum mismatch");
@@ -422,27 +443,95 @@ namespace LZ4Sharp.Streams
             return true;
         }
 
+        /// <summary>
+        /// Read and decompress next block directly into target span, bypassing _decompressedBuffer.
+        /// Returns decompressed byte count, or -1 on end of frame.
+        /// </summary>
+        private int ReadNextBlockDirect(Span<byte> target)
+        {
+            Span<byte> blockHeader = stackalloc byte[4];
+            if (!TryReadExact(blockHeader))
+                throw new InvalidDataException("Unexpected end of stream while reading block header");
+
+            uint blockHeaderValue = BinaryPrimitives.ReadUInt32LittleEndian(blockHeader);
+
+            if (blockHeaderValue == 0)
+            {
+                if (_contentChecksum)
+                {
+                    Span<byte> checksumBytes = stackalloc byte[4];
+                    ReadExact(checksumBytes);
+                    uint storedChecksum = BinaryPrimitives.ReadUInt32LittleEndian(checksumBytes);
+                    uint calculatedChecksum = XXHash.XXH32Digest(_contentChecksumState!);
+                    if (storedChecksum != calculatedChecksum)
+                        throw new InvalidDataException("Content checksum mismatch");
+                }
+                return -1;
+            }
+
+            bool isCompressed = (blockHeaderValue & 0x80000000) == 0;
+            int blockSize = (int)(blockHeaderValue & 0x7FFFFFFF);
+
+            if (blockSize > _blockMaxSize)
+                throw new InvalidDataException($"Block size {blockSize} exceeds maximum {_blockMaxSize}");
+
+            ReadExact(_compressedBlockBuffer.AsSpan(0, blockSize));
+
+            if (_blockChecksum)
+            {
+                Span<byte> checksumBytes = stackalloc byte[4];
+                ReadExact(checksumBytes);
+                uint storedChecksum = BinaryPrimitives.ReadUInt32LittleEndian(checksumBytes);
+                uint calculatedChecksum = XXHash.XXH32(_compressedBlockBuffer!, blockSize, 0);
+                if (storedChecksum != calculatedChecksum)
+                    throw new InvalidDataException("Block checksum mismatch");
+            }
+
+            int decompressedSize;
+            if (isCompressed)
+            {
+                decompressedSize = LZ4Codec.DecompressSafe(
+                    _compressedBlockBuffer.AsSpan(0, blockSize), target);
+                if (decompressedSize < 0)
+                    throw new InvalidDataException("Decompression failed");
+            }
+            else
+            {
+                _compressedBlockBuffer.AsSpan(0, blockSize).CopyTo(target);
+                decompressedSize = blockSize;
+            }
+
+            // Ensure intermediate buffer is marked empty
+            _decompressedBufferPos = 0;
+            _decompressedBufferLen = 0;
+
+            if (_contentChecksumState != null)
+            {
+                XXHash.XXH32Update(_contentChecksumState, target.Slice(0, decompressedSize));
+            }
+
+            return decompressedSize;
+        }
+
         private async ValueTask<bool> ReadNextBlockAsync(CancellationToken cancellationToken)
         {
             // Read block header
-            byte[] blockHeader = new byte[4];
-            int read = await _innerStream.ReadAsync(blockHeader, cancellationToken).ConfigureAwait(false);
+            int read = await _innerStream.ReadAsync(_asyncHeaderBuf, cancellationToken).ConfigureAwait(false);
             if (read == 0) return false;
             if (read < 4)
             {
-                await ReadExactAsync(blockHeader.AsMemory(read, 4 - read), cancellationToken).ConfigureAwait(false);
+                await ReadExactAsync(_asyncHeaderBuf.AsMemory(read, 4 - read), cancellationToken).ConfigureAwait(false);
             }
 
-            uint blockHeaderValue = (uint)(blockHeader[0] | (blockHeader[1] << 8) | (blockHeader[2] << 16) | (blockHeader[3] << 24));
+            uint blockHeaderValue = BinaryPrimitives.ReadUInt32LittleEndian(_asyncHeaderBuf.AsSpan());
 
             // Check for end mark
             if (blockHeaderValue == 0)
             {
                 if (_contentChecksum)
                 {
-                    byte[] checksumBytes = new byte[4];
-                    await ReadExactAsync(checksumBytes, cancellationToken).ConfigureAwait(false);
-                    uint storedChecksum = (uint)(checksumBytes[0] | (checksumBytes[1] << 8) | (checksumBytes[2] << 16) | (checksumBytes[3] << 24));
+                    await ReadExactAsync(_asyncHeaderBuf.AsMemory(0, 4), cancellationToken).ConfigureAwait(false);
+                    uint storedChecksum = BinaryPrimitives.ReadUInt32LittleEndian(_asyncHeaderBuf.AsSpan());
                     uint calculatedChecksum = XXHash.XXH32Digest(_contentChecksumState!);
                     if (storedChecksum != calculatedChecksum)
                         throw new InvalidDataException("Content checksum mismatch");
@@ -462,9 +551,8 @@ namespace LZ4Sharp.Streams
             // Read and verify block checksum if present
             if (_blockChecksum)
             {
-                byte[] checksumBytes = new byte[4];
-                await ReadExactAsync(checksumBytes, cancellationToken).ConfigureAwait(false);
-                uint storedChecksum = (uint)(checksumBytes[0] | (checksumBytes[1] << 8) | (checksumBytes[2] << 16) | (checksumBytes[3] << 24));
+                await ReadExactAsync(_asyncHeaderBuf.AsMemory(0, 4), cancellationToken).ConfigureAwait(false);
+                uint storedChecksum = BinaryPrimitives.ReadUInt32LittleEndian(_asyncHeaderBuf.AsSpan());
                 uint calculatedChecksum = XXHash.XXH32(_compressedBlockBuffer!, blockSize, 0);
                 if (storedChecksum != calculatedChecksum)
                     throw new InvalidDataException("Block checksum mismatch");

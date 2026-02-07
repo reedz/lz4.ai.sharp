@@ -5,6 +5,7 @@
 
 using System;
 using System.Buffers;
+using System.Buffers.Binary;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -27,6 +28,7 @@ namespace LZ4Sharp.Streams
         private bool _headerWritten;
         private bool _disposed;
         private XXHash.XXH32State? _contentChecksumState;
+        private readonly byte[] _asyncHeaderBuf = new byte[4];
 
         // Frame format constants
         private const uint LZ4F_MAGICNUMBER = 0x184D2204;
@@ -44,7 +46,7 @@ namespace LZ4Sharp.Streams
             _leaveOpen = leaveOpen;
 
             _inputBuffer = ArrayPool<byte>.Shared.Rent(_settings.BlockSize);
-            _outputBuffer = ArrayPool<byte>.Shared.Rent(LZ4Codec.CompressBound(_settings.BlockSize));
+            _outputBuffer = ArrayPool<byte>.Shared.Rent(LZ4Codec.CompressBound(_settings.BlockSize) + 4);
             _inputBufferPos = 0;
             _headerWritten = false;
 
@@ -194,32 +196,28 @@ namespace LZ4Sharp.Streams
                 XXHash.XXH32Update(_contentChecksumState, _inputBuffer.AsSpan(0, _inputBufferPos));
             }
 
-            // Compress the block
-            int compressedSize = CompressBlock(_inputBuffer!, 0, _inputBufferPos, _outputBuffer!);
+            // Compress to offset 4, leaving room for block header
+            int compressedSize = CompressBlock(_inputBuffer!, 0, _inputBufferPos, _outputBuffer!, 4);
 
-            // Determine if compression is beneficial
             bool useCompressed = compressedSize > 0 && compressedSize < _inputBufferPos;
             int blockDataSize = useCompressed ? compressedSize : _inputBufferPos;
 
-            // Write block header (4 bytes, little-endian)
+            // Write block header at offset 0
             uint blockHeader = (uint)blockDataSize;
             if (!useCompressed)
-                blockHeader |= 0x80000000; // High bit = uncompressed
+                blockHeader |= 0x80000000;
 
-            Span<byte> headerBytes = stackalloc byte[4];
-            headerBytes[0] = (byte)blockHeader;
-            headerBytes[1] = (byte)(blockHeader >> 8);
-            headerBytes[2] = (byte)(blockHeader >> 16);
-            headerBytes[3] = (byte)(blockHeader >> 24);
-            _innerStream.Write(headerBytes);
+            BinaryPrimitives.WriteUInt32LittleEndian(_outputBuffer.AsSpan(), blockHeader);
 
-            // Write block data
             if (useCompressed)
             {
-                _innerStream.Write(_outputBuffer.AsSpan(0, compressedSize));
+                // Single write: header (4) + compressed data
+                _innerStream.Write(_outputBuffer.AsSpan(0, 4 + compressedSize));
             }
             else
             {
+                // Header only from output buffer, then uncompressed from input buffer
+                _innerStream.Write(_outputBuffer.AsSpan(0, 4));
                 _innerStream.Write(_inputBuffer.AsSpan(0, _inputBufferPos));
             }
 
@@ -227,14 +225,12 @@ namespace LZ4Sharp.Streams
             if (_settings.BlockChecksum)
             {
                 byte[] blockData = useCompressed ? _outputBuffer! : _inputBuffer!;
+                int blockOff = useCompressed ? 4 : 0;
                 int blockLen = useCompressed ? compressedSize : _inputBufferPos;
-                uint checksum = XXHash.XXH32(blockData, blockLen, 0);
+                uint checksum = XXHash.XXH32((ReadOnlySpan<byte>)blockData.AsSpan(blockOff, blockLen), 0);
 
                 Span<byte> checksumBytes = stackalloc byte[4];
-                checksumBytes[0] = (byte)checksum;
-                checksumBytes[1] = (byte)(checksum >> 8);
-                checksumBytes[2] = (byte)(checksum >> 16);
-                checksumBytes[3] = (byte)(checksum >> 24);
+                BinaryPrimitives.WriteUInt32LittleEndian(checksumBytes, checksum);
                 _innerStream.Write(checksumBytes);
             }
 
@@ -251,32 +247,28 @@ namespace LZ4Sharp.Streams
                 XXHash.XXH32Update(_contentChecksumState, _inputBuffer.AsSpan(0, _inputBufferPos));
             }
 
-            // Compress the block
-            int compressedSize = CompressBlock(_inputBuffer!, 0, _inputBufferPos, _outputBuffer!);
+            // Compress to offset 4, leaving room for block header
+            int compressedSize = CompressBlock(_inputBuffer!, 0, _inputBufferPos, _outputBuffer!, 4);
 
-            // Determine if compression is beneficial
             bool useCompressed = compressedSize > 0 && compressedSize < _inputBufferPos;
             int blockDataSize = useCompressed ? compressedSize : _inputBufferPos;
 
-            // Write block header
+            // Write block header at offset 0
             uint blockHeader = (uint)blockDataSize;
             if (!useCompressed)
                 blockHeader |= 0x80000000;
 
-            byte[] headerBytes = new byte[4];
-            headerBytes[0] = (byte)blockHeader;
-            headerBytes[1] = (byte)(blockHeader >> 8);
-            headerBytes[2] = (byte)(blockHeader >> 16);
-            headerBytes[3] = (byte)(blockHeader >> 24);
-            await _innerStream.WriteAsync(headerBytes, cancellationToken).ConfigureAwait(false);
+            BinaryPrimitives.WriteUInt32LittleEndian(_outputBuffer.AsSpan(), blockHeader);
 
-            // Write block data
             if (useCompressed)
             {
-                await _innerStream.WriteAsync(_outputBuffer.AsMemory(0, compressedSize), cancellationToken).ConfigureAwait(false);
+                // Single write: header (4) + compressed data
+                await _innerStream.WriteAsync(_outputBuffer.AsMemory(0, 4 + compressedSize), cancellationToken).ConfigureAwait(false);
             }
             else
             {
+                // Header only from output buffer, then uncompressed from input buffer
+                await _innerStream.WriteAsync(_outputBuffer.AsMemory(0, 4), cancellationToken).ConfigureAwait(false);
                 await _innerStream.WriteAsync(_inputBuffer.AsMemory(0, _inputBufferPos), cancellationToken).ConfigureAwait(false);
             }
 
@@ -284,39 +276,34 @@ namespace LZ4Sharp.Streams
             if (_settings.BlockChecksum)
             {
                 byte[] blockData = useCompressed ? _outputBuffer! : _inputBuffer!;
+                int blockOff = useCompressed ? 4 : 0;
                 int blockLen = useCompressed ? compressedSize : _inputBufferPos;
-                uint checksum = XXHash.XXH32(blockData, blockLen, 0);
+                uint checksum = XXHash.XXH32((ReadOnlySpan<byte>)blockData.AsSpan(blockOff, blockLen), 0);
 
-                byte[] checksumBytes = new byte[4];
-                checksumBytes[0] = (byte)checksum;
-                checksumBytes[1] = (byte)(checksum >> 8);
-                checksumBytes[2] = (byte)(checksum >> 16);
-                checksumBytes[3] = (byte)(checksum >> 24);
-                await _innerStream.WriteAsync(checksumBytes, cancellationToken).ConfigureAwait(false);
+                BinaryPrimitives.WriteUInt32LittleEndian(_asyncHeaderBuf.AsSpan(), checksum);
+                await _innerStream.WriteAsync(_asyncHeaderBuf, cancellationToken).ConfigureAwait(false);
             }
 
             _inputBufferPos = 0;
         }
 
-        private int CompressBlock(byte[] source, int sourceOffset, int sourceSize, byte[] dest)
+        private int CompressBlock(byte[] source, int sourceOffset, int sourceSize, byte[] dest, int destOffset)
         {
             int level = _settings.GetInternalCompressionLevel();
+            int destLen = dest.Length - destOffset;
 
             if (level < 0)
             {
-                // Fast compression
                 int acceleration = -level;
-                return LZ4Codec.CompressFast(source.AsSpan(sourceOffset, sourceSize), dest, acceleration);
+                return LZ4Codec.CompressFast(source.AsSpan(sourceOffset, sourceSize), dest.AsSpan(destOffset, destLen), acceleration);
             }
             else if (level >= LZ4HC.CLEVEL_MIN)
             {
-                // HC compression
-                return LZ4HC.CompressHC(source, dest, sourceSize, dest.Length, level);
+                return LZ4HC.CompressHC(source.AsSpan(sourceOffset, sourceSize), dest.AsSpan(destOffset, destLen), level);
             }
             else
             {
-                // Default compression
-                return LZ4Codec.CompressDefault(source, dest, sourceSize, dest.Length);
+                return LZ4Codec.CompressDefault(source.AsSpan(sourceOffset, sourceSize), dest.AsSpan(destOffset, destLen));
             }
         }
 
@@ -326,10 +313,8 @@ namespace LZ4Sharp.Streams
             int pos = 0;
 
             // Magic number (4 bytes, little-endian)
-            header[pos++] = (byte)(LZ4F_MAGICNUMBER & 0xFF);
-            header[pos++] = (byte)((LZ4F_MAGICNUMBER >> 8) & 0xFF);
-            header[pos++] = (byte)((LZ4F_MAGICNUMBER >> 16) & 0xFF);
-            header[pos++] = (byte)((LZ4F_MAGICNUMBER >> 24) & 0xFF);
+            BinaryPrimitives.WriteUInt32LittleEndian(header, LZ4F_MAGICNUMBER);
+            pos = 4;
 
             // FLG byte
             byte flg = 0x40; // Version 01
@@ -367,15 +352,13 @@ namespace LZ4Sharp.Streams
             if (_settings.Dictionary.HasValue)
             {
                 uint dictId = _settings.Dictionary.Value;
-                header[pos++] = (byte)(dictId & 0xFF);
-                header[pos++] = (byte)((dictId >> 8) & 0xFF);
-                header[pos++] = (byte)((dictId >> 16) & 0xFF);
-                header[pos++] = (byte)((dictId >> 24) & 0xFF);
+                BinaryPrimitives.WriteUInt32LittleEndian(header.Slice(pos), dictId);
+                pos += 4;
                 headerDataLen += 4;
             }
 
             // Header checksum (XXH32 of header data, bits 15-8)
-            uint headerChecksum = XXHash.XXH32(header.Slice(headerDataStart, headerDataLen).ToArray(), headerDataLen, 0);
+            uint headerChecksum = XXHash.XXH32(header.Slice(headerDataStart, headerDataLen), 0);
             header[pos++] = (byte)((headerChecksum >> 8) & 0xFF);
 
             _innerStream.Write(header.Slice(0, pos));
@@ -385,10 +368,7 @@ namespace LZ4Sharp.Streams
         {
             // Write end mark (block size = 0)
             Span<byte> endMark = stackalloc byte[4];
-            endMark[0] = 0;
-            endMark[1] = 0;
-            endMark[2] = 0;
-            endMark[3] = 0;
+            BinaryPrimitives.WriteUInt32LittleEndian(endMark, 0);
             _innerStream.Write(endMark);
 
             // Write content checksum if enabled
@@ -396,10 +376,7 @@ namespace LZ4Sharp.Streams
             {
                 uint checksum = XXHash.XXH32Digest(_contentChecksumState);
                 Span<byte> checksumBytes = stackalloc byte[4];
-                checksumBytes[0] = (byte)checksum;
-                checksumBytes[1] = (byte)(checksum >> 8);
-                checksumBytes[2] = (byte)(checksum >> 16);
-                checksumBytes[3] = (byte)(checksum >> 24);
+                BinaryPrimitives.WriteUInt32LittleEndian(checksumBytes, checksum);
                 _innerStream.Write(checksumBytes);
             }
         }

@@ -7,7 +7,9 @@
  */
 
 using System;
+using System.Numerics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace LZ4Sharp
 {
@@ -56,6 +58,63 @@ namespace LZ4Sharp
             if (input == null)
                 throw new ArgumentNullException(nameof(input));
             return XXH32_Internal(input, 0, input.Length, seed);
+        }
+
+        /// <summary>
+        /// Calculate the 32-bit hash of a ReadOnlySpan (zero-allocation)
+        /// </summary>
+        public static uint XXH32(ReadOnlySpan<byte> input, uint seed = 0)
+        {
+            int length = input.Length;
+            ref byte inputRef = ref System.Runtime.InteropServices.MemoryMarshal.GetReference(input);
+            int p = 0;
+            int bEnd = length;
+            uint h32;
+
+            if (length >= 16)
+            {
+                int limit = bEnd - 15;
+                uint v1 = seed + PRIME32_1 + PRIME32_2;
+                uint v2 = seed + PRIME32_2;
+                uint v3 = seed + 0;
+                uint v4 = seed - PRIME32_1;
+
+                do
+                {
+                    v1 = XXH32_Round(v1, Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputRef, p))); p += 4;
+                    v2 = XXH32_Round(v2, Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputRef, p))); p += 4;
+                    v3 = XXH32_Round(v3, Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputRef, p))); p += 4;
+                    v4 = XXH32_Round(v4, Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputRef, p))); p += 4;
+                } while (p < limit);
+
+                h32 = RotateLeft(v1, 1) + RotateLeft(v2, 7) + RotateLeft(v3, 12) + RotateLeft(v4, 18);
+            }
+            else
+            {
+                h32 = seed + PRIME32_5;
+            }
+
+            h32 += (uint)length;
+
+            // Finalize
+            int remaining = length & 15;
+            while (remaining >= 4)
+            {
+                h32 += Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputRef, p)) * PRIME32_3;
+                p += 4;
+                h32 = RotateLeft(h32, 17) * PRIME32_4;
+                remaining -= 4;
+            }
+
+            while (remaining > 0)
+            {
+                h32 += Unsafe.Add(ref inputRef, p) * PRIME32_5;
+                p++;
+                h32 = RotateLeft(h32, 11) * PRIME32_1;
+                remaining--;
+            }
+
+            return XXH32_Avalanche(h32);
         }
 
         /// <summary>
@@ -147,25 +206,16 @@ namespace LZ4Sharp
             return XXH32_Avalanche(h32);
         }
 
-        /// <summary>
-        /// Read a 32-bit little-endian unsigned integer from a byte array
-        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static uint ReadUInt32LE(byte[] buffer, int offset)
         {
-            return (uint)(buffer[offset]
-                | (buffer[offset + 1] << 8)
-                | (buffer[offset + 2] << 16)
-                | (buffer[offset + 3] << 24));
+            return Unsafe.ReadUnaligned<uint>(ref buffer[offset]);
         }
 
-        /// <summary>
-        /// Rotate left operation
-        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static uint RotateLeft(uint value, int count)
         {
-            return (value << count) | (value >> (32 - count));
+            return BitOperations.RotateLeft(value, count);
         }
 
         /// <summary>
@@ -269,6 +319,55 @@ namespace LZ4Sharp
             }
 
             /// <summary>
+            /// Update the hash with more data from a ReadOnlySpan
+            /// </summary>
+            public void Update(ReadOnlySpan<byte> input)
+            {
+                int length = input.Length;
+                _totalLength += (uint)length;
+
+                int p = 0;
+                int bEnd = length;
+
+                if (_memorySize + length < 16)
+                {
+                    input.CopyTo(_memory.AsSpan(_memorySize));
+                    _memorySize += length;
+                    return;
+                }
+
+                if (_memorySize > 0)
+                {
+                    int fillLength = 16 - _memorySize;
+                    input.Slice(0, fillLength).CopyTo(_memory.AsSpan(_memorySize));
+
+                    _v1 = XXH32_Round(_v1, ReadUInt32LE(_memory, 0));
+                    _v2 = XXH32_Round(_v2, ReadUInt32LE(_memory, 4));
+                    _v3 = XXH32_Round(_v3, ReadUInt32LE(_memory, 8));
+                    _v4 = XXH32_Round(_v4, ReadUInt32LE(_memory, 12));
+
+                    p += fillLength;
+                    _memorySize = 0;
+                }
+
+                int limit = bEnd - 16;
+                ref byte inputRef = ref Unsafe.AsRef(in input[0]);
+                while (p <= limit)
+                {
+                    _v1 = XXH32_Round(_v1, Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputRef, p))); p += 4;
+                    _v2 = XXH32_Round(_v2, Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputRef, p))); p += 4;
+                    _v3 = XXH32_Round(_v3, Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputRef, p))); p += 4;
+                    _v4 = XXH32_Round(_v4, Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref inputRef, p))); p += 4;
+                }
+
+                if (p < bEnd)
+                {
+                    input.Slice(p).CopyTo(_memory);
+                    _memorySize = bEnd - p;
+                }
+            }
+
+            /// <summary>
             /// Get the final hash value
             /// </summary>
             public uint Digest()
@@ -303,7 +402,7 @@ namespace LZ4Sharp
         /// </summary>
         public static void XXH32Update(XXH32State state, ReadOnlySpan<byte> input)
         {
-            state.Update(input.ToArray(), 0, input.Length);
+            state.Update(input);
         }
 
         /// <summary>

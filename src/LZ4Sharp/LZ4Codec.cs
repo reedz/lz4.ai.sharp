@@ -105,22 +105,7 @@ namespace LZ4Sharp
             if (source.Length <= 0 || destination.Length <= 0)
                 return -1;
 
-            // LZ4HC currently operates on arrays; use pooled buffers to avoid allocations.
-            byte[] src = ArrayPool<byte>.Shared.Rent(source.Length);
-            byte[] dst = ArrayPool<byte>.Shared.Rent(destination.Length);
-            try
-            {
-                source.CopyTo(src);
-                int result = LZ4HC.CompressHC(src, dst, source.Length, destination.Length, LZ4HC.CLEVEL_MIN);
-                if (result > 0)
-                    dst.AsSpan(0, result).CopyTo(destination);
-                return result;
-            }
-            finally
-            {
-                ArrayPool<byte>.Shared.Return(src);
-                ArrayPool<byte>.Shared.Return(dst);
-            }
+            return LZ4HC.CompressHC(source, destination, LZ4HC.CLEVEL_MIN);
         }
 
         /// <summary>
@@ -747,7 +732,7 @@ namespace LZ4Sharp
                     }
                     else
                     {
-                        // Non-overlapping: copy 8 bytes at a time
+                        // Non-overlapping: copy with widest available SIMD
                         Poke8(op, Peek8(match));
                         if (length > 8)
                         {
@@ -756,7 +741,15 @@ namespace LZ4Sharp
                             {
                                 op += 16;
                                 match += 16;
-                                // Use overlapping write for tail
+                                if (Vector256.IsHardwareAccelerated && offset >= 32)
+                                {
+                                    while (op + 32 <= cpy)
+                                    {
+                                        Vector256.Load(match).Store(op);
+                                        op += 32;
+                                        match += 32;
+                                    }
+                                }
                                 while (op + 8 <= cpy)
                                 {
                                     Poke8(op, Peek8(match));
@@ -765,7 +758,6 @@ namespace LZ4Sharp
                                 }
                                 if (op < cpy)
                                 {
-                                    // Final overlapping 8-byte write to cover remainder
                                     Poke8(cpy - 8, Peek8(match + (cpy - op) - 8));
                                 }
                             }
@@ -808,9 +800,12 @@ namespace LZ4Sharp
                         op += 32;
                         ip += 32;
                     }
-                    while (op < copyEnd)
+                    if (op < copyEnd)
                     {
-                        *op++ = *ip++;
+                        // Overlapping 8-byte write covers remaining 1-31 bytes
+                        long rem = copyEnd - op;
+                        if (rem >= 16) { Poke8(op, Peek8(ip)); Poke8(op + 8, Peek8(ip + 8)); op += 16; ip += 16; }
+                        if (op < copyEnd) { Poke8(copyEnd - 8, Peek8(ip + (copyEnd - op) - 8)); }
                     }
                     op = copyEnd;
                 }
@@ -910,7 +905,7 @@ namespace LZ4Sharp
                 }
                 else
                 {
-                    // Non-overlapping copy: 8 bytes at a time
+                    // Non-overlapping copy: use widest available SIMD
                     Poke8(op, Peek8(match));
                     if (length > 8)
                     {
@@ -919,7 +914,15 @@ namespace LZ4Sharp
                         {
                             op += 16;
                             match += 16;
-                            // Use overlapping write for tail
+                            if (Vector256.IsHardwareAccelerated && offset >= 32)
+                            {
+                                while (op + 32 <= cpy)
+                                {
+                                    Vector256.Load(match).Store(op);
+                                    op += 32;
+                                    match += 32;
+                                }
+                            }
                             while (op + 8 <= cpy)
                             {
                                 Poke8(op, Peek8(match));
@@ -928,7 +931,6 @@ namespace LZ4Sharp
                             }
                             if (op < cpy)
                             {
-                                // Final overlapping 8-byte write to cover remainder
                                 Poke8(cpy - 8, Peek8(match + (cpy - op) - 8));
                             }
                         }

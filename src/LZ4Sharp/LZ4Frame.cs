@@ -8,6 +8,7 @@
 
 using System;
 using System.Buffers;
+using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 
 namespace LZ4Sharp
@@ -121,7 +122,6 @@ namespace LZ4Sharp
             int blockSize = prefs.GetBlockSize();
 
             int scratchSize = Math.Min(blockSize, sourceSize);
-            byte[] tempSrc = ArrayPool<byte>.Shared.Rent(scratchSize);
             byte[] compressedBlock = ArrayPool<byte>.Shared.Rent(LZ4Codec.CompressBound(scratchSize));
 
             try
@@ -130,25 +130,23 @@ namespace LZ4Sharp
                 {
                     int currentBlockSize = Math.Min(blockSize, sourceSize - srcPos);
 
-                    // Compress block
-                    Array.Copy(source, srcPos, tempSrc, 0, currentBlockSize);
-
                     int maxCompressedSize = LZ4Codec.CompressBound(currentBlockSize);
 
+                    // Compress directly from source at offset (no temp copy)
+                    var srcSlice = source.AsSpan(srcPos, currentBlockSize);
                     int compressedSize;
                     if (prefs.CompressionLevel < 0)
                     {
-                        // Negative levels use fast compression; magnitude maps to acceleration factor
                         int acceleration = -prefs.CompressionLevel;
-                        compressedSize = LZ4Codec.CompressFast(tempSrc, compressedBlock, currentBlockSize, maxCompressedSize, acceleration);
+                        compressedSize = LZ4Codec.CompressFast(srcSlice, compressedBlock, acceleration);
                     }
                     else if (prefs.CompressionLevel >= LZ4HC.CLEVEL_MIN)
                     {
-                        compressedSize = LZ4HC.CompressHC(tempSrc, compressedBlock, currentBlockSize, maxCompressedSize, prefs.CompressionLevel);
+                        compressedSize = LZ4HC.CompressHC(srcSlice, compressedBlock.AsSpan(0, maxCompressedSize), prefs.CompressionLevel);
                     }
                     else
                     {
-                        compressedSize = LZ4Codec.CompressDefault(tempSrc, compressedBlock, currentBlockSize, maxCompressedSize);
+                        compressedSize = LZ4Codec.CompressDefault(srcSlice, compressedBlock.AsSpan(0, maxCompressedSize));
                     }
 
                 if (compressedSize <= 0)
@@ -166,10 +164,8 @@ namespace LZ4Sharp
                 if (!useCompressed)
                     blockHeader |= 0x80000000; // Set high bit for uncompressed
 
-                destination[dstPos++] = (byte)blockHeader;
-                destination[dstPos++] = (byte)(blockHeader >> 8);
-                destination[dstPos++] = (byte)(blockHeader >> 16);
-                destination[dstPos++] = (byte)(blockHeader >> 24);
+                BinaryPrimitives.WriteUInt32LittleEndian(destination.AsSpan(dstPos), blockHeader);
+                dstPos += 4;
 
                 // Write block data
                 if (useCompressed)
@@ -179,7 +175,7 @@ namespace LZ4Sharp
                 }
                 else
                 {
-                    Array.Copy(tempSrc, 0, destination, dstPos, currentBlockSize);
+                    Array.Copy(source, srcPos, destination, dstPos, currentBlockSize);
                     dstPos += currentBlockSize;
                 }
 
@@ -188,7 +184,6 @@ namespace LZ4Sharp
             }
             finally
             {
-                ArrayPool<byte>.Shared.Return(tempSrc);
                 ArrayPool<byte>.Shared.Return(compressedBlock);
             }
 
@@ -196,10 +191,8 @@ namespace LZ4Sharp
             if (dstPos + 4 > maxDestinationSize)
                 return -1;
 
-            destination[dstPos++] = 0;
-            destination[dstPos++] = 0;
-            destination[dstPos++] = 0;
-            destination[dstPos++] = 0;
+            BinaryPrimitives.WriteUInt32LittleEndian(destination.AsSpan(dstPos), 0);
+            dstPos += 4;
 
             // Write content checksum if enabled
             if (prefs.ContentChecksumFlag == ContentChecksum.ChecksumEnabled)
@@ -210,47 +203,202 @@ namespace LZ4Sharp
                 // Calculate checksum over entire source
                 uint contentChecksum = XXHash.XXH32(source, 0);
 
-                destination[dstPos++] = (byte)contentChecksum;
-                destination[dstPos++] = (byte)(contentChecksum >> 8);
-                destination[dstPos++] = (byte)(contentChecksum >> 16);
-                destination[dstPos++] = (byte)(contentChecksum >> 24);
+                BinaryPrimitives.WriteUInt32LittleEndian(destination.AsSpan(dstPos), contentChecksum);
+                dstPos += 4;
             }
 
             return dstPos;
         }
 
         private static int WriteFrameHeader(byte[] destination, int offset, int maxSize, FramePreferences prefs)
+            => WriteFrameHeader(destination.AsSpan(offset, maxSize - offset), prefs);
+
+        private static int WriteFrameHeader(Span<byte> destination, FramePreferences prefs)
         {
-            if (offset + LZ4F_HEADERSIZE_MIN > maxSize)
+            if (destination.Length < LZ4F_HEADERSIZE_MIN)
                 return -1;
 
-            int dstPos = offset;
+            int dstPos = 0;
 
-            // Magic number (little-endian)
-            uint magic = LZ4F_MAGICNUMBER;
-            destination[dstPos++] = (byte)(magic & 0xFF);
-            destination[dstPos++] = (byte)((magic >> 8) & 0xFF);
-            destination[dstPos++] = (byte)((magic >> 16) & 0xFF);
-            destination[dstPos++] = (byte)((magic >> 24) & 0xFF);
+            BinaryPrimitives.WriteUInt32LittleEndian(destination, LZ4F_MAGICNUMBER);
+            dstPos += 4;
 
-            // FLG byte
             byte flg = 0x40; // Version 01
             flg |= (byte)((int)prefs.BlockMode << 5);
             flg |= (byte)((int)prefs.ContentChecksumFlag << 2);
             destination[dstPos++] = flg;
 
-            // BD byte - BlockMaxSize must be 4-7 per LZ4 frame spec
-            // Default (0) maps to Max64KB (4) for frame encoding
             int blockSizeIdForHeader = prefs.BlockSizeId == BlockSize.Default ? (int)BlockSize.Max64KB : (int)prefs.BlockSizeId;
             byte bd = (byte)(blockSizeIdForHeader << 4);
             destination[dstPos++] = bd;
 
-            // Header checksum (XXH32 of FLG and BD bytes, bits 15-8)
-            byte[] headerBytes = new byte[2] { flg, bd };
-            uint headerChecksum = XXHash.XXH32(headerBytes, 0);
+            Span<byte> headerBytes = stackalloc byte[2] { flg, bd };
+            uint headerChecksum = XXHash.XXH32((ReadOnlySpan<byte>)headerBytes, 0);
             destination[dstPos++] = (byte)((headerChecksum >> 8) & 0xFF);
 
-            return dstPos - offset;
+            return dstPos;
+        }
+
+        /// <summary>
+        /// Compress data into LZ4 frame format (Span overload)
+        /// </summary>
+        public static int CompressFrame(Span<byte> destination, ReadOnlySpan<byte> source, FramePreferences? prefs = null)
+        {
+            if (source.Length <= 0 || destination.Length <= 0)
+                return -1;
+
+            prefs ??= new FramePreferences();
+            int dstPos = 0;
+
+            int headerSize = WriteFrameHeader(destination, prefs);
+            if (headerSize < 0) return -1;
+            dstPos += headerSize;
+
+            int srcPos = 0;
+            int sourceSize = source.Length;
+            int blockSize = prefs.GetBlockSize();
+            int scratchSize = Math.Min(blockSize, sourceSize);
+            byte[] compressedBlock = ArrayPool<byte>.Shared.Rent(LZ4Codec.CompressBound(scratchSize));
+
+            try
+            {
+                while (srcPos < sourceSize)
+                {
+                    int currentBlockSize = Math.Min(blockSize, sourceSize - srcPos);
+                    int maxCompressedSize = LZ4Codec.CompressBound(currentBlockSize);
+
+                    var srcSlice = source.Slice(srcPos, currentBlockSize);
+                    int compressedSize;
+                    if (prefs.CompressionLevel < 0)
+                    {
+                        int acceleration = -prefs.CompressionLevel;
+                        compressedSize = LZ4Codec.CompressFast(srcSlice, compressedBlock, acceleration);
+                    }
+                    else if (prefs.CompressionLevel >= LZ4HC.CLEVEL_MIN)
+                    {
+                        compressedSize = LZ4HC.CompressHC(srcSlice, compressedBlock.AsSpan(0, maxCompressedSize), prefs.CompressionLevel);
+                    }
+                    else
+                    {
+                        compressedSize = LZ4Codec.CompressDefault(srcSlice, compressedBlock.AsSpan(0, maxCompressedSize));
+                    }
+
+                    if (compressedSize <= 0) return -1;
+
+                    bool useCompressed = compressedSize < currentBlockSize;
+                    int blockDataSize = useCompressed ? compressedSize : currentBlockSize;
+
+                    if (dstPos + 4 + blockDataSize > destination.Length)
+                        return -1;
+
+                    uint blockHeader = (uint)blockDataSize;
+                    if (!useCompressed) blockHeader |= 0x80000000;
+
+                    BinaryPrimitives.WriteUInt32LittleEndian(destination.Slice(dstPos), blockHeader);
+                    dstPos += 4;
+
+                    if (useCompressed)
+                    {
+                        compressedBlock.AsSpan(0, compressedSize).CopyTo(destination.Slice(dstPos));
+                        dstPos += compressedSize;
+                    }
+                    else
+                    {
+                        srcSlice.CopyTo(destination.Slice(dstPos));
+                        dstPos += currentBlockSize;
+                    }
+
+                    srcPos += currentBlockSize;
+                }
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(compressedBlock);
+            }
+
+            if (dstPos + 4 > destination.Length) return -1;
+            BinaryPrimitives.WriteUInt32LittleEndian(destination.Slice(dstPos), 0);
+            dstPos += 4;
+
+            if (prefs.ContentChecksumFlag == ContentChecksum.ChecksumEnabled)
+            {
+                if (dstPos + 4 > destination.Length) return -1;
+                uint contentChecksum = XXHash.XXH32(source, 0);
+                BinaryPrimitives.WriteUInt32LittleEndian(destination.Slice(dstPos), contentChecksum);
+                dstPos += 4;
+            }
+
+            return dstPos;
+        }
+
+        /// <summary>
+        /// Decompress data from LZ4 frame format (Span overload)
+        /// </summary>
+        public static int DecompressFrame(Span<byte> destination, ReadOnlySpan<byte> source)
+        {
+            if (source.Length <= 0 || destination.Length <= 0)
+                return -1;
+
+            int srcPos = 0;
+            int dstPos = 0;
+            int sourceSize = source.Length;
+
+            if (srcPos + 4 > sourceSize) return -1;
+            uint magic = BinaryPrimitives.ReadUInt32LittleEndian(source.Slice(srcPos));
+            if (magic != LZ4F_MAGICNUMBER) return -1;
+            srcPos += 4;
+
+            if (srcPos + 3 > sourceSize) return -1;
+            byte flg = source[srcPos++];
+            byte bd = source[srcPos++];
+            byte hc = source[srcPos++];
+
+            Span<byte> headerBytes = stackalloc byte[2] { flg, bd };
+            uint headerChecksum = XXHash.XXH32((ReadOnlySpan<byte>)headerBytes, 0);
+            if (((headerChecksum >> 8) & 0xFF) != hc) return -1;
+
+            bool contentChecksumFlag = ((flg >> 2) & 1) == 1;
+
+            while (srcPos < sourceSize)
+            {
+                if (srcPos + 4 > sourceSize) return -1;
+                uint blockHeader = BinaryPrimitives.ReadUInt32LittleEndian(source.Slice(srcPos));
+                srcPos += 4;
+
+                if (blockHeader == 0) break;
+
+                bool isCompressed = (blockHeader & 0x80000000) == 0;
+                int blockSz = (int)(blockHeader & 0x7FFFFFFF);
+
+                if (srcPos + blockSz > sourceSize) return -1;
+
+                if (isCompressed)
+                {
+                    int decompressedSize = LZ4Codec.DecompressSafe(
+                        source.Slice(srcPos, blockSz),
+                        destination.Slice(dstPos));
+                    if (decompressedSize < 0) return -1;
+                    dstPos += decompressedSize;
+                }
+                else
+                {
+                    if (dstPos + blockSz > destination.Length) return -1;
+                    source.Slice(srcPos, blockSz).CopyTo(destination.Slice(dstPos));
+                    dstPos += blockSz;
+                }
+
+                srcPos += blockSz;
+            }
+
+            if (contentChecksumFlag)
+            {
+                if (srcPos + 4 > sourceSize) return -1;
+                uint storedChecksum = BinaryPrimitives.ReadUInt32LittleEndian(source.Slice(srcPos));
+                uint calculatedChecksum = XXHash.XXH32((ReadOnlySpan<byte>)destination.Slice(0, dstPos), 0);
+                if (storedChecksum != calculatedChecksum) return -1;
+            }
+
+            return dstPos;
         }
 
         /// <summary>
@@ -268,7 +416,7 @@ namespace LZ4Sharp
             if (srcPos + 4 > sourceSize)
                 return -1;
 
-            uint magic = (uint)(source[srcPos] | (source[srcPos + 1] << 8) | (source[srcPos + 2] << 16) | (source[srcPos + 3] << 24));
+            uint magic = BinaryPrimitives.ReadUInt32LittleEndian(source.AsSpan(srcPos));
             if (magic != LZ4F_MAGICNUMBER)
                 return -1;
 
@@ -283,8 +431,8 @@ namespace LZ4Sharp
             byte hc = source[srcPos++];
 
             // Validate header checksum
-            byte[] headerBytes = new byte[2] { flg, bd };
-            uint headerChecksum = XXHash.XXH32(headerBytes, 0);
+            Span<byte> headerBytes = stackalloc byte[2] { flg, bd };
+            uint headerChecksum = XXHash.XXH32((ReadOnlySpan<byte>)headerBytes, 0);
             if (((headerChecksum >> 8) & 0xFF) != hc)
                 return -1;
 
@@ -296,7 +444,7 @@ namespace LZ4Sharp
                 if (srcPos + 4 > sourceSize)
                     return -1;
 
-                uint blockHeader = (uint)(source[srcPos] | (source[srcPos + 1] << 8) | (source[srcPos + 2] << 16) | (source[srcPos + 3] << 24));
+                uint blockHeader = BinaryPrimitives.ReadUInt32LittleEndian(source.AsSpan(srcPos));
                 srcPos += 4;
 
                 if (blockHeader == 0)
@@ -340,7 +488,7 @@ namespace LZ4Sharp
                 if (srcPos + 4 > sourceSize)
                     return -1;
 
-                uint storedChecksum = (uint)(source[srcPos] | (source[srcPos + 1] << 8) | (source[srcPos + 2] << 16) | (source[srcPos + 3] << 24));
+                uint storedChecksum = BinaryPrimitives.ReadUInt32LittleEndian(source.AsSpan(srcPos));
 
                 uint calculatedChecksum = XXHash.XXH32(destination, dstPos, 0);
 

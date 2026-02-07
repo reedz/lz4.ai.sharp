@@ -128,6 +128,48 @@ namespace LZ4Sharp
             destination[dstPos++] = (byte)len;
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static unsafe void WriteLen255Unsafe(byte* destination, ref int dstPos, int len)
+        {
+            while (len >= 4 * 255)
+            {
+                Unsafe.WriteUnaligned(ref destination[dstPos], 0xFFFFFFFFu);
+                dstPos += 4;
+                len -= 4 * 255;
+            }
+            while (len >= 255)
+            {
+                destination[dstPos++] = 255;
+                len -= 255;
+            }
+            destination[dstPos++] = (byte)len;
+        }
+
+        /// <summary>
+        /// Compress data using LZ4 High Compression mode (Span overload, zero-copy)
+        /// </summary>
+        public static int CompressHC(ReadOnlySpan<byte> source, Span<byte> destination, int compressionLevel = CLEVEL_DEFAULT)
+        {
+            if (source.Length <= 0 || destination.Length <= 0)
+                return -1;
+
+            if (compressionLevel < CLEVEL_MIN) compressionLevel = CLEVEL_MIN;
+            if (compressionLevel > CLEVEL_MAX) compressionLevel = CLEVEL_MAX;
+
+            var ctx = t_context ??= new HCContext();
+
+            unsafe
+            {
+                fixed (byte* srcPtr = source)
+                fixed (byte* dstPtr = destination)
+                fixed (HashEntry* hashTable = ctx.HashTable)
+                fixed (ushort* chainTable = ctx.ChainTable)
+                {
+                    return CompressHCUnsafe(ctx, srcPtr, dstPtr, source.Length, destination.Length, compressionLevel, hashTable, chainTable);
+                }
+            }
+        }
+
         // Internal context for HC compression
         private struct HashEntry
         {
@@ -144,7 +186,23 @@ namespace LZ4Sharp
             public uint NextToUpdate;
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         private static int CompressHCInternal(HCContext ctx, byte[] source, byte[] destination, int sourceSize, int maxDestinationSize, int compressionLevel)
+        {
+            unsafe
+            {
+                fixed (byte* srcPtr = source)
+                fixed (byte* dstPtr = destination)
+                fixed (HashEntry* hashTable = ctx.HashTable)
+                fixed (ushort* chainTable = ctx.ChainTable)
+                {
+                    return CompressHCUnsafe(ctx, srcPtr, dstPtr, sourceSize, maxDestinationSize, compressionLevel, hashTable, chainTable);
+                }
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        private static unsafe int CompressHCUnsafe(HCContext ctx, byte* source, byte* destination, int sourceSize, int maxDestinationSize, int compressionLevel, HashEntry* hashTable, ushort* chainTable)
         {
             var cParams = LevelParams[compressionLevel];
             int srcPos = 0;
@@ -165,82 +223,74 @@ namespace LZ4Sharp
 
             srcPos++;
 
-            unsafe
+            // Main loop
+            while (srcPos < srcLimit)
             {
-                fixed (byte* srcBase = source)
-                fixed (HashEntry* hashTable = ctx.HashTable)
-                fixed (ushort* chainTable = ctx.ChainTable)
+                // Find match
+                var match = FindBestMatch(ctx, source, hashTable, chainTable, srcPos, srcEnd, cParams.NbSearches, cParams.TargetLength, srcPos - LZ4_DISTANCE_MAX);
+
+                if (match.Length < MINMATCH)
                 {
-                    // Main loop
-                    while (srcPos < srcLimit)
-                    {
-                        // Find match
-                        var match = FindBestMatch(ctx, srcBase, hashTable, chainTable, srcPos, srcEnd, cParams.NbSearches, cParams.TargetLength, srcPos - LZ4_DISTANCE_MAX);
-
-                        if (match.Length < MINMATCH)
-                        {
-                            srcPos++;
-                            continue;
-                        }
-
-                        // Encode sequence
-                        int litLength = srcPos - anchor;
-                        int matchLength = match.Length;
-                        int offset = srcPos - match.Position;
-
-                        // Check output buffer space
-                        int tokenPos = dstPos++;
-                        if (dstPos + litLength / 255 + litLength + 2 + matchLength / 255 + LASTLITERALS > dstEnd)
-                            return 0;
-
-                        // Encode literal length
-                        if (litLength >= RUN_MASK)
-                        {
-                            destination[tokenPos] = (byte)(RUN_MASK << ML_BITS);
-                            WriteLen255(destination, ref dstPos, litLength - RUN_MASK);
-                        }
-                        else
-                        {
-                            destination[tokenPos] = (byte)(litLength << ML_BITS);
-                        }
-
-                        // Copy literals
-                        if (litLength != 0)
-                        {
-                            Unsafe.CopyBlockUnaligned(
-                                ref destination[dstPos],
-                                ref source[anchor],
-                                (uint)litLength);
-                            dstPos += litLength;
-                        }
-
-                        // Encode offset (little-endian)
-                        if (s_isLittleEndian)
-                            Unsafe.WriteUnaligned(ref destination[dstPos], (ushort)offset);
-                        else
-                        {
-                            destination[dstPos] = (byte)offset;
-                            destination[dstPos + 1] = (byte)(offset >> 8);
-                        }
-                        dstPos += 2;
-
-                        // Encode match length
-                        int mlCode = matchLength - MINMATCH;
-                        if (mlCode >= ML_MASK)
-                        {
-                            destination[tokenPos] += ML_MASK;
-                            WriteLen255(destination, ref dstPos, mlCode - ML_MASK);
-                        }
-                        else
-                        {
-                            destination[tokenPos] += (byte)mlCode;
-                        }
-
-                        // Move forward
-                        srcPos += matchLength;
-                        anchor = srcPos;
-                    }
+                    srcPos++;
+                    continue;
                 }
+
+                // Encode sequence
+                int litLength = srcPos - anchor;
+                int matchLength = match.Length;
+                int offset = srcPos - match.Position;
+
+                // Check output buffer space
+                int tokenPos = dstPos++;
+                if (dstPos + litLength / 255 + litLength + 2 + matchLength / 255 + LASTLITERALS > dstEnd)
+                    return 0;
+
+                // Encode literal length
+                if (litLength >= RUN_MASK)
+                {
+                    destination[tokenPos] = (byte)(RUN_MASK << ML_BITS);
+                    WriteLen255Unsafe(destination, ref dstPos, litLength - RUN_MASK);
+                }
+                else
+                {
+                    destination[tokenPos] = (byte)(litLength << ML_BITS);
+                }
+
+                // Copy literals
+                if (litLength != 0)
+                {
+                    Unsafe.CopyBlockUnaligned(
+                        ref destination[dstPos],
+                        ref source[anchor],
+                        (uint)litLength);
+                    dstPos += litLength;
+                }
+
+                // Encode offset (little-endian)
+                if (s_isLittleEndian)
+                    Unsafe.WriteUnaligned(ref destination[dstPos], (ushort)offset);
+                else
+                {
+                    destination[dstPos] = (byte)offset;
+                    destination[dstPos + 1] = (byte)(offset >> 8);
+                }
+                dstPos += 2;
+
+                // Encode match length
+                int mlCode = matchLength - MINMATCH;
+                if (mlCode >= ML_MASK)
+                {
+                    destination[tokenPos] += ML_MASK;
+                    WriteLen255Unsafe(destination, ref dstPos, mlCode - ML_MASK);
+                }
+                else
+                {
+                    destination[tokenPos] += (byte)mlCode;
+                }
+
+                // Move forward
+                srcPos += matchLength;
+                anchor = srcPos;
             }
 
             // Encode last literals
@@ -251,7 +301,7 @@ namespace LZ4Sharp
             if (lastLiterals >= RUN_MASK)
             {
                 destination[dstPos++] = (byte)(RUN_MASK << ML_BITS);
-                WriteLen255(destination, ref dstPos, lastLiterals - RUN_MASK);
+                WriteLen255Unsafe(destination, ref dstPos, lastLiterals - RUN_MASK);
             }
             else
             {
@@ -300,7 +350,25 @@ namespace LZ4Sharp
             byte* start = p1;
             if (p1 >= end) return 0;
 
-            if (Vector256.IsHardwareAccelerated && p1 + 32 <= end && p2 + 32 <= end)
+            if (Vector512.IsHardwareAccelerated && p1 + 64 <= end && p2 + 64 <= end)
+            {
+                while (p1 + 64 <= end && p2 + 64 <= end)
+                {
+                    var v1 = Vector512.Load(p1);
+                    var v2 = Vector512.Load(p2);
+                    var eq = Vector512.Equals(v1, v2);
+                    ulong mask = eq.ExtractMostSignificantBits();
+
+                    if (mask != 0xFFFFFFFFFFFFFFFF)
+                    {
+                        return (int)(p1 - start) + BitOperations.TrailingZeroCount(~mask);
+                    }
+
+                    p1 += 64;
+                    p2 += 64;
+                }
+            }
+            else if (Vector256.IsHardwareAccelerated && p1 + 32 <= end && p2 + 32 <= end)
             {
                 while (p1 + 32 <= end && p2 + 32 <= end)
                 {
@@ -422,6 +490,7 @@ namespace LZ4Sharp
             return false;
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
         private static unsafe MatchInfo FindBestMatch(
             HCContext ctx,
             byte* srcBase,
