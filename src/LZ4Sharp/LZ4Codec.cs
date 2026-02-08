@@ -637,7 +637,7 @@ namespace LZ4Sharp
         /// Core unsafe decompression implementation
         /// Optimized with lookup tables for small offset handling
         /// </summary>
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         private static int DecompressUnsafe(byte* source, byte* dest, int compressedSize, int outputSize)
         {
             byte* ip = source;
@@ -649,10 +649,6 @@ namespace LZ4Sharp
             byte* match;
             uint offset;
 
-            // Shortcut pointers for fast path
-            byte* shortiend = iend - 14 - 2; // 14 = maxLL, 2 = offset
-            byte* shortoend = oend - 14 - 18; // 14 = maxLL, 18 = maxML
-
             while (ip < iend)
             {
                 // Get literal length
@@ -660,7 +656,8 @@ namespace LZ4Sharp
                 uint length = token >> ML_BITS;
 
                 // Fast path shortcut for common case
-                if (length != RUN_MASK && ip < shortiend && op <= shortoend)
+                // (inlined bounds: iend-16 = maxLL+offset slack, oend-32 = maxLL+maxML slack)
+                if (length != RUN_MASK && ip < iend - 16 && op <= oend - 32)
                 {
                     // Copy up to 16 literals at once using direct memory operations
                     Poke8(op, Peek8(ip));
@@ -698,71 +695,8 @@ namespace LZ4Sharp
                     }
                     length = matchLen + MINMATCH;
 
-                    // Copy match
-                    cpy = op + length;
-                    if (cpy > oend)
-                        return -1;
-
-                    // Handle copy based on offset
-                    if (offset < 8)
-                    {
-                        // Small offset: use lookup table approach
-                        op[0] = match[0];
-                        op[1] = match[1];
-                        op[2] = match[2];
-                        op[3] = match[3];
-                        match += Inc32Table[offset];
-                        Poke4(op + 4, Peek4(match));
-                        match -= Dec64Table[offset];
-                        op += 8;
-
-                        // Continue with overlapping copy using tail optimization
-                        while (op + 8 <= cpy)
-                        {
-                            Poke8(op, Peek8(match));
-                            op += 8;
-                            match += 8;
-                        }
-                        if (op < cpy)
-                        {
-                            // Final overlapping 8-byte write
-                            Poke8(cpy - 8, Peek8(match + (cpy - op) - 8));
-                        }
-                        op = cpy;
-                    }
-                    else
-                    {
-                        // Non-overlapping match copy
-                        if (cpy > oend - 8)
-                        {
-                            byte* safeEnd = oend - 8;
-                            while (op < safeEnd)
-                            {
-                                Copy8(op, match);
-                                op += 8;
-                                match += 8;
-                            }
-                            while (op < cpy) { *op++ = *match++; }
-                        }
-                        else
-                        {
-                            Copy8(op, match);
-                            Copy8(op + 8, match + 8);
-                            if (length > 16)
-                            {
-                                op += 16;
-                                match += 16;
-                                do
-                                {
-                                    Copy8(op, match);
-                                    op += 8;
-                                    match += 8;
-                                } while (op < cpy);
-                            }
-                        }
-                        op = cpy;
-                    }
-                    continue;
+                    // Share match copy with slow path
+                    goto copyMatch;
                 }
 
                 // Decode literal length (slow path)
@@ -817,19 +751,12 @@ namespace LZ4Sharp
                         ip += 16;
                     } while (op < copyEnd - 15);
                     
-                    // Handle remaining 1-15 bytes with overlapping 8-byte writes
+                    // Handle remaining 1-15 bytes with two overlapping writes (no branch)
                     if (op < copyEnd)
                     {
                         long rem = copyEnd - op;
-                        if (rem > 8)
-                        {
-                            Poke8(op, Peek8(ip));
-                            Poke8(op + 8, Peek8(ip + 8));
-                        }
-                        else
-                        {
-                            Poke8(op, Peek8(ip));
-                        }
+                        Poke8(op, Peek8(ip));
+                        Poke8(copyEnd - 8, Peek8(ip + rem - 8));
                         ip += rem;
                         op = copyEnd;
                     }
@@ -872,7 +799,8 @@ namespace LZ4Sharp
                 }
                 length += MINMATCH;
 
-                // Copy match
+copyMatch:
+                // Shared match copy (used by both fast-path-extended and slow path)
                 cpy = op + length;
                 if (cpy > oend)
                     return -1;

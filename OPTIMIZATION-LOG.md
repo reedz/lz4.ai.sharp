@@ -55,11 +55,11 @@ Track of all performance changes attempted across optimization sessions.
 - **WildCopy8 (SIMD version) is NOT safe for decompression match copies** — it may overwrite past the output buffer. Must use inline do/while Copy8 loop with `cpy > oend - 8` safety guards.
 - **K4os decompression insight**: K4os v1.3.8 uses `LL64.LZ4_decompress_generic` with purely scalar 8-byte WildCopy8. No SIMD anywhere in decompression. Compact `Copy8→Copy8→if(len>16) WildCopy8` pattern.
 
-## Current Performance vs K4os (as of Phase 4)
+## Current Performance vs K4os (as of Phase 5)
 
 - **Fast compress**: 0.29–0.80× (20–71% faster) ✅
-- **HC compress**: 0.25–0.81× (19–75% faster) ✅
-- **Codec decompress**: 1.00–1.22× (improved from 1.03–1.38×) ⚠️ still slower but narrowing
+- **HC compress**: 0.25–0.84× (16–75% faster) ✅
+- **Codec decompress**: 0.89–1.17× (major improvement from 1.00–1.22×) ✅
 - **Stream compress**: 0.14–0.76× (up to 7× faster at HC12) ✅
 - **Stream decompress**: 0.59–0.93× ✅
 - **Stream roundtrip**: 0.19–0.93× ✅
@@ -78,3 +78,16 @@ Track of all performance changes attempted across optimization sessions.
 | 7 | LZ4Codec | Decompress fast-path literal copy optimization | ⏭️ Already optimal — unconditional 16B copy in fast path |
 | 8 | LZ4HC | Batch InsertAndUpdate hash writes | ⏭️ Skipped — memory-latency bound, batching won't help |
 | 9 | LZ4Codec | Mid-loop literal WildCopy8 | ⏭️ Already uses WildCopy8 (line 271) |
+
+## Phase 5: Decompression Method Size Reduction
+
+| # | Area | Change | Result |
+|---|------|--------|--------|
+| 1 | LZ4Codec | Share match copy via `goto copyMatch` — eliminate duplicate match copy in fast/slow paths | ✅ Kept — JIT code 1447→1045 bytes (28% reduction), 5-20% faster |
+| 2 | LZ4Codec | Simplify literal copy remainder — two overlapping Poke8 writes instead of `if (rem > 8)` branch | ✅ Kept — one fewer branch, 1045→1031 bytes |
+| 3 | LZ4Codec | Inline bounds checks — remove `shortiend`/`shortoend` locals, compute `iend-16`/`oend-32` in-place | ✅ Kept — 2 fewer stack spills, 1031→950 bytes |
+| 4 | LZ4Codec | Replace `[AggressiveOptimization]` with `[NoInlining]` to enable tiered PGO | ✅ Kept — PGO optimizes branch layout, 1kb now 0.89× K4os |
+
+### Phase 5 Key Insight
+
+`[AggressiveOptimization]` forces immediate Tier 1 JIT compilation, which uses "Synthesized PGO" (heuristic-based branch frequencies). By replacing it with `[NoInlining]`, the JIT uses tiered compilation: Tier 0 → profile collection → Tier 1 with real PGO. The real branch frequency data allows the JIT to lay out the hot fast-path contiguously, dramatically improving performance for branch-heavy methods like DecompressUnsafe.

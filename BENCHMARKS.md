@@ -140,22 +140,22 @@ Source: `JsonBenchmarks` — decompresses 100 documents per call.
 
 | Size | Level | K4os Mean | LZ4Sharp Mean | Ratio (LZ4Sharp/K4os) |
 |------|------:|----------:|--------------:|----------------------:|
-| 1kb | 3 | 31.20 μs | 31.81 μs | 1.02 |
-| 1kb | 6 | 31.00 μs | 31.43 μs | 1.01 |
-| 1kb | 9 | 31.38 μs | 29.70 μs | 0.95 |
-| 1kb | 12 | 33.34 μs | 31.81 μs | 0.95 |
-| 7kb | 3 | 313.83 μs | 352.83 μs | 1.12 |
-| 7kb | 6 | 315.43 μs | 334.70 μs | 1.06 |
-| 7kb | 9 | 305.62 μs | 371.33 μs | 1.22 |
-| 7kb | 12 | 313.84 μs | 363.17 μs | 1.16 |
-| 16kb | 3 | 664.82 μs | 743.59 μs | 1.12 |
-| 16kb | 6 | 646.14 μs | 742.61 μs | 1.15 |
-| 16kb | 9 | 648.83 μs | 719.02 μs | 1.11 |
-| 16kb | 12 | 688.33 μs | 754.42 μs | 1.10 |
-| 72kb | 3 | 3.451 ms | 4.011 ms | 1.16 |
-| 72kb | 6 | 3.213 ms | 3.800 ms | 1.18 |
-| 72kb | 9 | 3.239 ms | 4.125 ms | 1.27 |
-| 72kb | 12 | 3.811 ms | 3.976 ms | 1.04 |
+| 1kb | 3 | 27.88 μs | 24.81 μs | 0.89 |
+| 1kb | 6 | 28.10 μs | 26.07 μs | 0.93 |
+| 1kb | 9 | 27.81 μs | 25.73 μs | 0.93 |
+| 1kb | 12 | 28.45 μs | 25.76 μs | 0.91 |
+| 7kb | 3 | 242.04 μs | 276.87 μs | 1.14 |
+| 7kb | 6 | 240.14 μs | 281.50 μs | 1.17 |
+| 7kb | 9 | 247.75 μs | 284.21 μs | 1.15 |
+| 7kb | 12 | 247.99 μs | 268.31 μs | 1.08 |
+| 16kb | 3 | 604.77 μs | 678.35 μs | 1.12 |
+| 16kb | 6 | 610.71 μs | 638.90 μs | 1.05 |
+| 16kb | 9 | 604.61 μs | 638.43 μs | 1.06 |
+| 16kb | 12 | 630.75 μs | 644.55 μs | 1.02 |
+| 72kb | 3 | 3.083 ms | 3.313 ms | 1.07 |
+| 72kb | 6 | 3.143 ms | 3.264 ms | 1.04 |
+| 72kb | 9 | 2.948 ms | 3.269 ms | 1.11 |
+| 72kb | 12 | 3.172 ms | 3.190 ms | 1.01 |
 
 ## Streaming API (LZ4Stream)
 
@@ -165,72 +165,73 @@ Source: `StreamBenchmarks` (JSON dataset corpus, payload buckets: `<10kb`, `<100
 ### Compress
 | Payload | Level | K4os Mean | LZ4Sharp Mean | Ratio (LZ4Sharp/K4os) |
 |---------|------:|----------:|--------------:|----------------------:|
-| <10kb | -1 | 3.186 ms | 2.259 ms | 0.71 |
-| <10kb | 3 | 11.508 ms | 6.412 ms | 0.56 |
-| <10kb | 9 | 12.339 ms | 6.557 ms | 0.53 |
-| <10kb | 12 | 45.137 ms | 6.512 ms | 0.14 |
-| <100kb | -1 | 17.175 ms | 13.352 ms | 0.78 |
-| <100kb | 3 | 64.835 ms | 46.927 ms | 0.72 |
-| <100kb | 9 | 75.484 ms | 52.225 ms | 0.69 |
-| <100kb | 12 | 173.28 ms | 55.329 ms | 0.32 |
-| <1mb | -1 | 82.439 ms | 63.743 ms | 0.77 |
-| <1mb | 3 | 499.48 ms | 302.26 ms | 0.61 |
-| <1mb | 9 | 872.62 ms | 397.06 ms | 0.46 |
-| <1mb | 12 | 1,828.72 ms | 475.69 ms | 0.26 |
-| >1mb | -1 | 88.145 ms | 65.293 ms | 0.74 |
-| >1mb | 3 | 551.42 ms | 297.92 ms | 0.54 |
-| >1mb | 9 | 996.01 ms | 418.70 ms | 0.42 |
-| >1mb | 12 | 2,128.77 ms | 460.61 ms | 0.22 |
+| <10kb | -1 | 3.195 ms | 2.297 ms | 0.72 |
+| <10kb | 3 | 12.917 ms | 6.577 ms | 0.51 |
+| <10kb | 9 | 12.293 ms | 6.605 ms | 0.54 |
+| <10kb | 12 | 49.485 ms | 6.657 ms | 0.13 |
+| <100kb | -1 | 22.672 ms | 17.113 ms | 0.75 |
+| <100kb | 3 | 70.325 ms | 47.614 ms | 0.68 |
+| <100kb | 9 | 88.088 ms | 53.103 ms | 0.60 |
+| <100kb | 12 | 181.16 ms | 53.274 ms | 0.29 |
+| <1mb | -1 | 80.633 ms | 62.887 ms | 0.78 |
+| <1mb | 3 | 519.41 ms | 278.91 ms | 0.54 |
+| <1mb | 9 | 935.04 ms | 400.20 ms | 0.43 |
+| <1mb | 12 | 1,845.02 ms | 417.57 ms | 0.23 |
+| >1mb | -1 | 84.220 ms | 63.880 ms | 0.76 |
+| >1mb | 3 | 567.83 ms | 294.46 ms | 0.52 |
+| >1mb | 9 | 982.07 ms | 416.91 ms | 0.42 |
+| >1mb | 12 | 2,170.37 ms | 442.57 ms | 0.20 |
 
 ### Decompress
 | Payload | Level | K4os Mean | LZ4Sharp Mean | Ratio (LZ4Sharp/K4os) |
 |---------|------:|----------:|--------------:|----------------------:|
-| <10kb | -1 | 2.710 ms | 1.896 ms | 0.70 |
-| <10kb | 3 | 2.794 ms | 1.883 ms | 0.67 |
-| <10kb | 9 | 2.688 ms | 1.896 ms | 0.71 |
-| <10kb | 12 | 2.690 ms | 1.903 ms | 0.71 |
-| <100kb | -1 | 16.855 ms | 14.307 ms | 0.85 |
-| <100kb | 3 | 17.909 ms | 13.417 ms | 0.75 |
-| <100kb | 9 | 17.051 ms | 13.377 ms | 0.78 |
-| <100kb | 12 | 16.911 ms | 14.112 ms | 0.83 |
-| <1mb | -1 | 123.62 ms | 111.76 ms | 0.90 |
-| <1mb | 3 | 128.53 ms | 102.58 ms | 0.80 |
-| <1mb | 9 | 119.07 ms | 111.98 ms | 0.94 |
-| <1mb | 12 | 124.56 ms | 108.58 ms | 0.87 |
-| >1mb | -1 | 156.43 ms | 133.86 ms | 0.86 |
-| >1mb | 3 | 160.91 ms | 143.73 ms | 0.89 |
-| >1mb | 9 | 163.32 ms | 148.84 ms | 0.91 |
-| >1mb | 12 | 160.36 ms | 158.01 ms | 0.99 |
+| <10kb | -1 | 2.768 ms | 1.903 ms | 0.69 |
+| <10kb | 3 | 2.713 ms | 1.850 ms | 0.68 |
+| <10kb | 9 | 2.713 ms | 1.867 ms | 0.69 |
+| <10kb | 12 | 2.802 ms | 1.927 ms | 0.69 |
+| <100kb | -1 | 17.009 ms | 12.857 ms | 0.76 |
+| <100kb | 3 | 16.908 ms | 13.806 ms | 0.82 |
+| <100kb | 9 | 18.057 ms | 13.372 ms | 0.74 |
+| <100kb | 12 | 20.024 ms | 13.078 ms | 0.65 |
+| <1mb | -1 | 124.06 ms | 110.86 ms | 0.89 |
+| <1mb | 3 | 131.39 ms | 105.95 ms | 0.81 |
+| <1mb | 9 | 125.17 ms | 108.93 ms | 0.87 |
+| <1mb | 12 | 116.98 ms | 109.38 ms | 0.94 |
+| >1mb | -1 | 165.40 ms | 151.68 ms | 0.92 |
+| >1mb | 3 | 161.69 ms | 147.23 ms | 0.91 |
+| >1mb | 9 | 180.53 ms | 143.02 ms | 0.79 |
+| >1mb | 12 | 157.12 ms | 141.15 ms | 0.90 |
 
 ### Roundtrip (compress + decompress)
 | Payload | Level | K4os Mean | LZ4Sharp Mean | Ratio (LZ4Sharp/K4os) |
 |---------|------:|----------:|--------------:|----------------------:|
-| <10kb | -1 | 6.104 ms | 4.481 ms | 0.73 |
-| <10kb | 3 | 14.934 ms | 8.565 ms | 0.57 |
-| <10kb | 9 | 16.363 ms | 8.605 ms | 0.53 |
-| <10kb | 12 | 48.502 ms | 8.982 ms | 0.19 |
-| <100kb | -1 | 34.186 ms | 27.395 ms | 0.80 |
-| <100kb | 3 | 83.681 ms | 60.219 ms | 0.72 |
-| <100kb | 9 | 92.939 ms | 65.583 ms | 0.71 |
-| <100kb | 12 | 190.57 ms | 65.584 ms | 0.34 |
-| <1mb | -1 | 216.19 ms | 172.73 ms | 0.80 |
-| <1mb | 3 | 664.87 ms | 390.00 ms | 0.59 |
-| <1mb | 9 | 983.61 ms | 502.40 ms | 0.51 |
-| <1mb | 12 | 1,989.75 ms | 541.72 ms | 0.27 |
-| >1mb | -1 | 221.99 ms | 206.53 ms | 0.93 |
-| >1mb | 3 | 727.01 ms | 441.28 ms | 0.61 |
-| >1mb | 9 | 1,140.80 ms | 550.16 ms | 0.48 |
-| >1mb | 12 | 2,379.26 ms | 659.06 ms | 0.28 |
+| <10kb | -1 | 6.501 ms | 4.696 ms | 0.72 |
+| <10kb | 3 | 14.945 ms | 8.862 ms | 0.59 |
+| <10kb | 9 | 15.092 ms | 8.911 ms | 0.59 |
+| <10kb | 12 | 52.157 ms | 9.544 ms | 0.18 |
+| <100kb | -1 | 34.969 ms | 27.223 ms | 0.78 |
+| <100kb | 3 | 86.092 ms | 60.283 ms | 0.70 |
+| <100kb | 9 | 92.206 ms | 67.764 ms | 0.73 |
+| <100kb | 12 | 188.42 ms | 67.927 ms | 0.36 |
+| <1mb | -1 | 202.14 ms | 167.18 ms | 0.83 |
+| <1mb | 3 | 637.31 ms | 422.18 ms | 0.66 |
+| <1mb | 9 | 1,006.41 ms | 516.29 ms | 0.51 |
+| <1mb | 12 | 2,016.54 ms | 516.63 ms | 0.26 |
+| >1mb | -1 | 253.01 ms | 214.55 ms | 0.85 |
+| >1mb | 3 | 707.77 ms | 460.61 ms | 0.65 |
+| >1mb | 9 | 1,156.90 ms | 573.45 ms | 0.50 |
+| >1mb | 12 | 2,239.48 ms | 591.55 ms | 0.26 |
 
 ## Summary
 - **JSON dataset (fast compress)**: LZ4Sharp is **0.29–0.80×** K4os (20–71% faster) across all payload sizes. Zero managed allocations.
-- **JSON dataset (decompress)**: LZ4Sharp is **0.95–1.27×** K4os. Near parity for small payloads (1kb); 10-20% slower for medium payloads (7-72kb). Narrowed from 1.03–1.38× via decompression loop simplification.
+- **JSON dataset (HC compress)**: LZ4Sharp is **0.25–0.84×** K4os (16–75% faster). Up to 4× faster at HC12.
+- **JSON dataset (decompress)**: LZ4Sharp is **0.89–1.17×** K4os. Faster for small payloads (1kb: 7-11% faster); within 2-17% for medium payloads (7-72kb). Major improvement from Phase 5 decompression loop restructuring + PGO.
 - **Silesia corpus**:
   - At **Accel 1**, LZ4Sharp is faster (0.09–1.00 ratio) with competitive compression ratios.
   - At **higher acceleration**, LZ4Sharp gains massive speedups (e.g., up to ~10× faster at Accel 16) but trades off compression ratio, offering a flexible performance profile.
 - **Streaming API**:
-  - **Compress**: LZ4Sharp is **1.3–7.1× faster** (0.14–0.78 ratio). Advantage grows dramatically at HC levels (up to **4.6× faster** at HC12 for large payloads). Frame API compresses directly into destination (zero intermediate copies).
-  - **Decompress**: LZ4Sharp is **1.0–1.5× faster** (0.67–0.99 ratio). Direct-to-user-buffer optimization eliminates intermediate copies.
-  - **Roundtrip**: LZ4Sharp is **1.1–5.3× faster** end-to-end, dominated by the compression advantage.
+  - **Compress**: LZ4Sharp is **1.3–7.7× faster** (0.13–0.78 ratio). Advantage grows dramatically at HC levels (up to **5× faster** at HC12 for large payloads). Frame API compresses directly into destination (zero intermediate copies).
+  - **Decompress**: LZ4Sharp is **1.1–1.5× faster** (0.65–0.94 ratio). Direct-to-user-buffer optimization eliminates intermediate copies.
+  - **Roundtrip**: LZ4Sharp is **1.2–5.5× faster** end-to-end, dominated by the compression advantage.
 
 Detailed BenchmarkDotNet outputs: `BenchmarkDotNet.Artifacts/results/`.
