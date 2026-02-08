@@ -732,34 +732,32 @@ namespace LZ4Sharp
                     }
                     else
                     {
-                        // Non-overlapping: copy with widest available SIMD
-                        Poke8(op, Peek8(match));
-                        if (length > 8)
+                        // Non-overlapping match copy
+                        if (cpy > oend - 8)
                         {
-                            Poke8(op + 8, Peek8(match + 8));
+                            byte* safeEnd = oend - 8;
+                            while (op < safeEnd)
+                            {
+                                Copy8(op, match);
+                                op += 8;
+                                match += 8;
+                            }
+                            while (op < cpy) { *op++ = *match++; }
+                        }
+                        else
+                        {
+                            Copy8(op, match);
+                            Copy8(op + 8, match + 8);
                             if (length > 16)
                             {
                                 op += 16;
                                 match += 16;
-                                if (Vector256.IsHardwareAccelerated && offset >= 32)
+                                do
                                 {
-                                    while (op + 32 <= cpy)
-                                    {
-                                        Vector256.Load(match).Store(op);
-                                        op += 32;
-                                        match += 32;
-                                    }
-                                }
-                                while (op + 8 <= cpy)
-                                {
-                                    Poke8(op, Peek8(match));
+                                    Copy8(op, match);
                                     op += 8;
                                     match += 8;
-                                }
-                                if (op < cpy)
-                                {
-                                    Poke8(cpy - 8, Peek8(match + (cpy - op) - 8));
-                                }
+                                } while (op < cpy);
                             }
                         }
                         op = cpy;
@@ -802,7 +800,6 @@ namespace LZ4Sharp
                     }
                     if (op < copyEnd)
                     {
-                        // Overlapping 8-byte write covers remaining 1-31 bytes
                         long rem = copyEnd - op;
                         if (rem >= 16) { Poke8(op, Peek8(ip)); Poke8(op + 8, Peek8(ip + 8)); op += 16; ip += 16; }
                         if (op < copyEnd) { Poke8(copyEnd - 8, Peek8(ip + (copyEnd - op) - 8)); }
@@ -820,27 +817,31 @@ namespace LZ4Sharp
                         ip += 16;
                     } while (op < copyEnd - 15);
                     
-                    // Handle remaining bytes
-                    while (op < copyEnd)
+                    // Handle remaining 1-15 bytes with overlapping 8-byte writes
+                    if (op < copyEnd)
                     {
-                        *op++ = *ip++;
+                        long rem = copyEnd - op;
+                        if (rem > 8)
+                        {
+                            Poke8(op, Peek8(ip));
+                            Poke8(op + 8, Peek8(ip + 8));
+                        }
+                        else
+                        {
+                            Poke8(op, Peek8(ip));
+                        }
+                        ip += rem;
+                        op = copyEnd;
                     }
-                    op = copyEnd;
                 }
-                else if (length >= 8)
+                else
                 {
+                    // length < 16: one or two 8-byte copies cover it
                     Poke8(op, Peek8(ip));
                     if (length > 8)
                     {
                         Poke8(op + 8, Peek8(ip + 8));
                     }
-                    ip += length;
-                    op = cpy;
-                }
-                else
-                {
-                    // Small literal copy
-                    Poke8(op, Peek8(ip));
                     ip += length;
                     op = cpy;
                 }
@@ -905,34 +906,36 @@ namespace LZ4Sharp
                 }
                 else
                 {
-                    // Non-overlapping copy: use widest available SIMD
-                    Poke8(op, Peek8(match));
-                    if (length > 8)
+                    // Non-overlapping match copy
+                    if (cpy > oend - 8)
                     {
-                        Poke8(op + 8, Peek8(match + 8));
+                        // Near end: use 8-byte copies up to safe limit, then byte-exact
+                        byte* safeEnd = oend - 8;
+                        while (op < safeEnd)
+                        {
+                            Copy8(op, match);
+                            op += 8;
+                            match += 8;
+                        }
+                        while (op < cpy)
+                        {
+                            *op++ = *match++;
+                        }
+                    }
+                    else
+                    {
+                        Copy8(op, match);
+                        Copy8(op + 8, match + 8);
                         if (length > 16)
                         {
                             op += 16;
                             match += 16;
-                            if (Vector256.IsHardwareAccelerated && offset >= 32)
+                            do
                             {
-                                while (op + 32 <= cpy)
-                                {
-                                    Vector256.Load(match).Store(op);
-                                    op += 32;
-                                    match += 32;
-                                }
-                            }
-                            while (op + 8 <= cpy)
-                            {
-                                Poke8(op, Peek8(match));
+                                Copy8(op, match);
                                 op += 8;
                                 match += 8;
-                            }
-                            if (op < cpy)
-                            {
-                                Poke8(cpy - 8, Peek8(match + (cpy - op) - 8));
-                            }
+                            } while (op < cpy);
                         }
                     }
                     op = cpy;

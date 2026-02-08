@@ -7,7 +7,6 @@
  */
 
 using System;
-using System.Buffers;
 using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 
@@ -121,33 +120,32 @@ namespace LZ4Sharp
             int srcPos = 0;
             int blockSize = prefs.GetBlockSize();
 
-            int scratchSize = Math.Min(blockSize, sourceSize);
-            byte[] compressedBlock = ArrayPool<byte>.Shared.Rent(LZ4Codec.CompressBound(scratchSize));
-
-            try
+            while (srcPos < sourceSize)
             {
-                while (srcPos < sourceSize)
+                int currentBlockSize = Math.Min(blockSize, sourceSize - srcPos);
+                int maxCompressedSize = LZ4Codec.CompressBound(currentBlockSize);
+
+                // Ensure enough room for header + worst-case compressed data
+                if (dstPos + 4 + maxCompressedSize > maxDestinationSize)
+                    return -1;
+
+                // Compress directly into destination (after 4-byte header slot)
+                var srcSlice = source.AsSpan(srcPos, currentBlockSize);
+                var dstSlice = destination.AsSpan(dstPos + 4, maxCompressedSize);
+                int compressedSize;
+                if (prefs.CompressionLevel < 0)
                 {
-                    int currentBlockSize = Math.Min(blockSize, sourceSize - srcPos);
-
-                    int maxCompressedSize = LZ4Codec.CompressBound(currentBlockSize);
-
-                    // Compress directly from source at offset (no temp copy)
-                    var srcSlice = source.AsSpan(srcPos, currentBlockSize);
-                    int compressedSize;
-                    if (prefs.CompressionLevel < 0)
-                    {
-                        int acceleration = -prefs.CompressionLevel;
-                        compressedSize = LZ4Codec.CompressFast(srcSlice, compressedBlock, acceleration);
-                    }
-                    else if (prefs.CompressionLevel >= LZ4HC.CLEVEL_MIN)
-                    {
-                        compressedSize = LZ4HC.CompressHC(srcSlice, compressedBlock.AsSpan(0, maxCompressedSize), prefs.CompressionLevel);
-                    }
-                    else
-                    {
-                        compressedSize = LZ4Codec.CompressDefault(srcSlice, compressedBlock.AsSpan(0, maxCompressedSize));
-                    }
+                    int acceleration = -prefs.CompressionLevel;
+                    compressedSize = LZ4Codec.CompressFast(srcSlice, dstSlice, acceleration);
+                }
+                else if (prefs.CompressionLevel >= LZ4HC.CLEVEL_MIN)
+                {
+                    compressedSize = LZ4HC.CompressHC(srcSlice, dstSlice, prefs.CompressionLevel);
+                }
+                else
+                {
+                    compressedSize = LZ4Codec.CompressDefault(srcSlice, dstSlice);
+                }
 
                 if (compressedSize <= 0)
                     return -1;
@@ -167,10 +165,9 @@ namespace LZ4Sharp
                 BinaryPrimitives.WriteUInt32LittleEndian(destination.AsSpan(dstPos), blockHeader);
                 dstPos += 4;
 
-                // Write block data
                 if (useCompressed)
                 {
-                    Array.Copy(compressedBlock, 0, destination, dstPos, compressedSize);
+                    // Data already in place from direct compression
                     dstPos += compressedSize;
                 }
                 else
@@ -180,11 +177,6 @@ namespace LZ4Sharp
                 }
 
                 srcPos += currentBlockSize;
-            }
-            }
-            finally
-            {
-                ArrayPool<byte>.Shared.Return(compressedBlock);
             }
 
             // Write end mark (block size = 0)
@@ -257,63 +249,60 @@ namespace LZ4Sharp
             int srcPos = 0;
             int sourceSize = source.Length;
             int blockSize = prefs.GetBlockSize();
-            int scratchSize = Math.Min(blockSize, sourceSize);
-            byte[] compressedBlock = ArrayPool<byte>.Shared.Rent(LZ4Codec.CompressBound(scratchSize));
 
-            try
+            while (srcPos < sourceSize)
             {
-                while (srcPos < sourceSize)
+                int currentBlockSize = Math.Min(blockSize, sourceSize - srcPos);
+                int maxCompressedSize = LZ4Codec.CompressBound(currentBlockSize);
+
+                // Ensure enough room for header + worst-case compressed data
+                if (dstPos + 4 + maxCompressedSize > destination.Length)
+                    return -1;
+
+                // Compress directly into destination (after 4-byte header slot)
+                var srcSlice = source.Slice(srcPos, currentBlockSize);
+                var dstSlice = destination.Slice(dstPos + 4, maxCompressedSize);
+                int compressedSize;
+                if (prefs.CompressionLevel < 0)
                 {
-                    int currentBlockSize = Math.Min(blockSize, sourceSize - srcPos);
-                    int maxCompressedSize = LZ4Codec.CompressBound(currentBlockSize);
-
-                    var srcSlice = source.Slice(srcPos, currentBlockSize);
-                    int compressedSize;
-                    if (prefs.CompressionLevel < 0)
-                    {
-                        int acceleration = -prefs.CompressionLevel;
-                        compressedSize = LZ4Codec.CompressFast(srcSlice, compressedBlock, acceleration);
-                    }
-                    else if (prefs.CompressionLevel >= LZ4HC.CLEVEL_MIN)
-                    {
-                        compressedSize = LZ4HC.CompressHC(srcSlice, compressedBlock.AsSpan(0, maxCompressedSize), prefs.CompressionLevel);
-                    }
-                    else
-                    {
-                        compressedSize = LZ4Codec.CompressDefault(srcSlice, compressedBlock.AsSpan(0, maxCompressedSize));
-                    }
-
-                    if (compressedSize <= 0) return -1;
-
-                    bool useCompressed = compressedSize < currentBlockSize;
-                    int blockDataSize = useCompressed ? compressedSize : currentBlockSize;
-
-                    if (dstPos + 4 + blockDataSize > destination.Length)
-                        return -1;
-
-                    uint blockHeader = (uint)blockDataSize;
-                    if (!useCompressed) blockHeader |= 0x80000000;
-
-                    BinaryPrimitives.WriteUInt32LittleEndian(destination.Slice(dstPos), blockHeader);
-                    dstPos += 4;
-
-                    if (useCompressed)
-                    {
-                        compressedBlock.AsSpan(0, compressedSize).CopyTo(destination.Slice(dstPos));
-                        dstPos += compressedSize;
-                    }
-                    else
-                    {
-                        srcSlice.CopyTo(destination.Slice(dstPos));
-                        dstPos += currentBlockSize;
-                    }
-
-                    srcPos += currentBlockSize;
+                    int acceleration = -prefs.CompressionLevel;
+                    compressedSize = LZ4Codec.CompressFast(srcSlice, dstSlice, acceleration);
                 }
-            }
-            finally
-            {
-                ArrayPool<byte>.Shared.Return(compressedBlock);
+                else if (prefs.CompressionLevel >= LZ4HC.CLEVEL_MIN)
+                {
+                    compressedSize = LZ4HC.CompressHC(srcSlice, dstSlice, prefs.CompressionLevel);
+                }
+                else
+                {
+                    compressedSize = LZ4Codec.CompressDefault(srcSlice, dstSlice);
+                }
+
+                if (compressedSize <= 0) return -1;
+
+                bool useCompressed = compressedSize < currentBlockSize;
+                int blockDataSize = useCompressed ? compressedSize : currentBlockSize;
+
+                if (dstPos + 4 + blockDataSize > destination.Length)
+                    return -1;
+
+                uint blockHeader = (uint)blockDataSize;
+                if (!useCompressed) blockHeader |= 0x80000000;
+
+                BinaryPrimitives.WriteUInt32LittleEndian(destination.Slice(dstPos), blockHeader);
+                dstPos += 4;
+
+                if (useCompressed)
+                {
+                    // Data already in place from direct compression
+                    dstPos += compressedSize;
+                }
+                else
+                {
+                    srcSlice.CopyTo(destination.Slice(dstPos));
+                    dstPos += currentBlockSize;
+                }
+
+                srcPos += currentBlockSize;
             }
 
             if (dstPos + 4 > destination.Length) return -1;

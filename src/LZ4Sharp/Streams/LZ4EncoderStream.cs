@@ -112,14 +112,23 @@ namespace LZ4Sharp.Streams
                 _headerWritten = true;
             }
 
+            int blockSize = _settings.BlockSize;
+
+            // Fast path: compress full blocks directly from user buffer (skip _inputBuffer copy)
+            while (_inputBufferPos == 0 && buffer.Length >= blockSize)
+            {
+                FlushBlockDirect(buffer.Slice(0, blockSize));
+                buffer = buffer.Slice(blockSize);
+            }
+
             while (buffer.Length > 0)
             {
-                int bytesToCopy = Math.Min(buffer.Length, _settings.BlockSize - _inputBufferPos);
+                int bytesToCopy = Math.Min(buffer.Length, blockSize - _inputBufferPos);
                 buffer.Slice(0, bytesToCopy).CopyTo(_inputBuffer.AsSpan(_inputBufferPos));
                 _inputBufferPos += bytesToCopy;
                 buffer = buffer.Slice(bytesToCopy);
 
-                if (_inputBufferPos >= _settings.BlockSize)
+                if (_inputBufferPos >= blockSize)
                 {
                     FlushBlock();
                 }
@@ -237,6 +246,52 @@ namespace LZ4Sharp.Streams
             _inputBufferPos = 0;
         }
 
+        /// <summary>
+        /// Compress and write a full block directly from the source span, bypassing _inputBuffer.
+        /// </summary>
+        private void FlushBlockDirect(ReadOnlySpan<byte> source)
+        {
+            int blockSize = source.Length;
+
+            if (_contentChecksumState != null)
+            {
+                XXHash.XXH32Update(_contentChecksumState, source);
+            }
+
+            int compressedSize = CompressBlock(source, _outputBuffer.AsSpan(4));
+
+            bool useCompressed = compressedSize > 0 && compressedSize < blockSize;
+            int blockDataSize = useCompressed ? compressedSize : blockSize;
+
+            uint blockHeader = (uint)blockDataSize;
+            if (!useCompressed)
+                blockHeader |= 0x80000000;
+
+            BinaryPrimitives.WriteUInt32LittleEndian(_outputBuffer.AsSpan(), blockHeader);
+
+            if (useCompressed)
+            {
+                _innerStream.Write(_outputBuffer.AsSpan(0, 4 + compressedSize));
+            }
+            else
+            {
+                _innerStream.Write(_outputBuffer.AsSpan(0, 4));
+                _innerStream.Write(source);
+            }
+
+            if (_settings.BlockChecksum)
+            {
+                ReadOnlySpan<byte> blockData = useCompressed
+                    ? _outputBuffer.AsSpan(4, compressedSize)
+                    : source;
+                uint checksum = XXHash.XXH32(blockData, 0);
+
+                Span<byte> checksumBytes = stackalloc byte[4];
+                BinaryPrimitives.WriteUInt32LittleEndian(checksumBytes, checksum);
+                _innerStream.Write(checksumBytes);
+            }
+        }
+
         private async ValueTask FlushBlockAsync(CancellationToken cancellationToken)
         {
             if (_inputBufferPos == 0) return;
@@ -289,21 +344,25 @@ namespace LZ4Sharp.Streams
 
         private int CompressBlock(byte[] source, int sourceOffset, int sourceSize, byte[] dest, int destOffset)
         {
+            return CompressBlock(source.AsSpan(sourceOffset, sourceSize), dest.AsSpan(destOffset, dest.Length - destOffset));
+        }
+
+        private int CompressBlock(ReadOnlySpan<byte> source, Span<byte> dest)
+        {
             int level = _settings.GetInternalCompressionLevel();
-            int destLen = dest.Length - destOffset;
 
             if (level < 0)
             {
                 int acceleration = -level;
-                return LZ4Codec.CompressFast(source.AsSpan(sourceOffset, sourceSize), dest.AsSpan(destOffset, destLen), acceleration);
+                return LZ4Codec.CompressFast(source, dest, acceleration);
             }
             else if (level >= LZ4HC.CLEVEL_MIN)
             {
-                return LZ4HC.CompressHC(source.AsSpan(sourceOffset, sourceSize), dest.AsSpan(destOffset, destLen), level);
+                return LZ4HC.CompressHC(source, dest, level);
             }
             else
             {
-                return LZ4Codec.CompressDefault(source.AsSpan(sourceOffset, sourceSize), dest.AsSpan(destOffset, destLen));
+                return LZ4Codec.CompressDefault(source, dest);
             }
         }
 

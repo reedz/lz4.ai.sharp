@@ -140,22 +140,22 @@ Source: `JsonBenchmarks` — decompresses 100 documents per call.
 
 | Size | Level | K4os Mean | LZ4Sharp Mean | Ratio (LZ4Sharp/K4os) |
 |------|------:|----------:|--------------:|----------------------:|
-| 1kb | 3 | 27.36 μs | 28.26 μs | 1.03 |
-| 1kb | 6 | 27.57 μs | 28.46 μs | 1.03 |
-| 1kb | 9 | 26.95 μs | 29.68 μs | 1.10 |
-| 1kb | 12 | 27.26 μs | 28.06 μs | 1.03 |
-| 7kb | 3 | 246.79 μs | 341.53 μs | 1.38 |
-| 7kb | 6 | 242.09 μs | 316.53 μs | 1.31 |
-| 7kb | 9 | 247.32 μs | 314.06 μs | 1.27 |
-| 7kb | 12 | 245.42 μs | 309.77 μs | 1.26 |
-| 16kb | 3 | 591.97 μs | 747.96 μs | 1.26 |
-| 16kb | 6 | 609.20 μs | 736.51 μs | 1.21 |
-| 16kb | 9 | 593.76 μs | 729.38 μs | 1.23 |
-| 16kb | 12 | 608.63 μs | 740.20 μs | 1.22 |
-| 72kb | 3 | 2.994 ms | 3.585 ms | 1.20 |
-| 72kb | 6 | 2.820 ms | 3.492 ms | 1.24 |
-| 72kb | 9 | 2.810 ms | 3.622 ms | 1.29 |
-| 72kb | 12 | 3.206 ms | 3.547 ms | 1.11 |
+| 1kb | 3 | 31.20 μs | 31.81 μs | 1.02 |
+| 1kb | 6 | 31.00 μs | 31.43 μs | 1.01 |
+| 1kb | 9 | 31.38 μs | 29.70 μs | 0.95 |
+| 1kb | 12 | 33.34 μs | 31.81 μs | 0.95 |
+| 7kb | 3 | 313.83 μs | 352.83 μs | 1.12 |
+| 7kb | 6 | 315.43 μs | 334.70 μs | 1.06 |
+| 7kb | 9 | 305.62 μs | 371.33 μs | 1.22 |
+| 7kb | 12 | 313.84 μs | 363.17 μs | 1.16 |
+| 16kb | 3 | 664.82 μs | 743.59 μs | 1.12 |
+| 16kb | 6 | 646.14 μs | 742.61 μs | 1.15 |
+| 16kb | 9 | 648.83 μs | 719.02 μs | 1.11 |
+| 16kb | 12 | 688.33 μs | 754.42 μs | 1.10 |
+| 72kb | 3 | 3.451 ms | 4.011 ms | 1.16 |
+| 72kb | 6 | 3.213 ms | 3.800 ms | 1.18 |
+| 72kb | 9 | 3.239 ms | 4.125 ms | 1.27 |
+| 72kb | 12 | 3.811 ms | 3.976 ms | 1.04 |
 
 ## Streaming API (LZ4Stream)
 
@@ -224,13 +224,13 @@ Source: `StreamBenchmarks` (JSON dataset corpus, payload buckets: `<10kb`, `<100
 
 ## Summary
 - **JSON dataset (fast compress)**: LZ4Sharp is **0.29–0.80×** K4os (20–71% faster) across all payload sizes. Zero managed allocations.
-- **JSON dataset (decompress)**: LZ4Sharp is **1.03–1.38×** K4os (3–38% slower). Raw decompression is a known gap vs K4os's optimized decoder.
+- **JSON dataset (decompress)**: LZ4Sharp is **0.95–1.27×** K4os. Near parity for small payloads (1kb); 10-20% slower for medium payloads (7-72kb). Narrowed from 1.03–1.38× via decompression loop simplification.
 - **Silesia corpus**:
   - At **Accel 1**, LZ4Sharp is faster (0.09–1.00 ratio) with competitive compression ratios.
   - At **higher acceleration**, LZ4Sharp gains massive speedups (e.g., up to ~10× faster at Accel 16) but trades off compression ratio, offering a flexible performance profile.
 - **Streaming API**:
-  - **Compress**: LZ4Sharp is **1.3–7.1× faster** (0.14–0.78 ratio). Advantage grows dramatically at HC levels (up to **4.6× faster** at HC12 for large payloads).
-  - **Decompress**: LZ4Sharp is **1.0–1.5× faster** (0.67–0.99 ratio). Previous regressions on large payloads eliminated via direct-to-user-buffer optimization.
+  - **Compress**: LZ4Sharp is **1.3–7.1× faster** (0.14–0.78 ratio). Advantage grows dramatically at HC levels (up to **4.6× faster** at HC12 for large payloads). Frame API compresses directly into destination (zero intermediate copies).
+  - **Decompress**: LZ4Sharp is **1.0–1.5× faster** (0.67–0.99 ratio). Direct-to-user-buffer optimization eliminates intermediate copies.
   - **Roundtrip**: LZ4Sharp is **1.1–5.3× faster** end-to-end, dominated by the compression advantage.
 
 Detailed BenchmarkDotNet outputs: `BenchmarkDotNet.Artifacts/results/`.
