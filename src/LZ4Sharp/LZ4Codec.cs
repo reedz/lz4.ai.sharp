@@ -139,11 +139,11 @@ namespace LZ4Sharp
         /// <summary>
         /// Core unsafe compression implementation
         /// </summary>
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         private static int CompressUnsafe(byte* source, byte* dest, int inputSize, int maxOutputSize)
             => CompressUnsafe(source, dest, inputSize, maxOutputSize, DEFAULT_ACCELERATION);
 
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         private static int CompressUnsafe(byte* source, byte* dest, int inputSize, int maxOutputSize, int acceleration)
         {
             if (inputSize < MFLIMIT)
@@ -168,7 +168,7 @@ namespace LZ4Sharp
         /// <summary>
         /// Compression for medium inputs (&lt;64KB) using 4-byte hash - no branch in hot loop
         /// </summary>
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         private static int CompressMediumInput(byte* source, byte* dest, int inputSize, int maxOutputSize, int acceleration)
         {
             byte* ip = source;
@@ -371,7 +371,7 @@ namespace LZ4Sharp
         /// <summary>
         /// Compression for large inputs (>=64KB) using 5-byte hash with larger hash table
         /// </summary>
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         private static int CompressLargeInput(byte* source, byte* dest, int inputSize, int maxOutputSize, int acceleration)
         {
             byte* ip = source;
@@ -952,6 +952,16 @@ copyMatch:
         private static uint LZ4_count(byte* pIn, byte* pMatch, byte* pInLimit)
         {
             byte* pStart = pIn;
+
+            // Scalar fast path: most matches are short (4-16 bytes)
+            if (pIn + 8 <= pInLimit)
+            {
+                ulong diff = Peek8(pIn) ^ Peek8(pMatch);
+                if (diff != 0)
+                    return (uint)(System.Numerics.BitOperations.TrailingZeroCount(diff) >> 3);
+                pIn += 8;
+                pMatch += 8;
+            }
 
             if (Vector512.IsHardwareAccelerated && (pIn + 64 <= pInLimit))
             {

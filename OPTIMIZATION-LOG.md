@@ -55,14 +55,14 @@ Track of all performance changes attempted across optimization sessions.
 - **WildCopy8 (SIMD version) is NOT safe for decompression match copies** — it may overwrite past the output buffer. Must use inline do/while Copy8 loop with `cpy > oend - 8` safety guards.
 - **K4os decompression insight**: K4os v1.3.8 uses `LL64.LZ4_decompress_generic` with purely scalar 8-byte WildCopy8. No SIMD anywhere in decompression. Compact `Copy8→Copy8→if(len>16) WildCopy8` pattern.
 
-## Current Performance vs K4os (as of Phase 5)
+## Current Performance vs K4os (as of Phase 6)
 
-- **Fast compress**: 0.29–0.80× (20–71% faster) ✅
-- **HC compress**: 0.25–0.84× (16–75% faster) ✅
-- **Codec decompress**: 0.89–1.17× (major improvement from 1.00–1.22×) ✅
-- **Stream compress**: 0.14–0.76× (up to 7× faster at HC12) ✅
-- **Stream decompress**: 0.59–0.93× ✅
-- **Stream roundtrip**: 0.19–0.93× ✅
+- **Fast compress**: 0.09–0.80× (20–91% faster) ✅
+- **HC compress**: 0.26–0.76× (24–74% faster) ✅
+- **Codec decompress**: 0.88–1.15× (major improvement from 1.02–1.36×) ✅
+- **Stream compress**: 0.13–0.78× (up to 7.7× faster at HC12) ✅
+- **Stream decompress**: 0.65–0.94× ✅
+- **Stream roundtrip**: 0.18–0.85× ✅
 - **Frame compress**: 0 allocations (direct-to-destination) ✅
 
 ## Phase 4: Further Optimizations
@@ -91,3 +91,20 @@ Track of all performance changes attempted across optimization sessions.
 ### Phase 5 Key Insight
 
 `[AggressiveOptimization]` forces immediate Tier 1 JIT compilation, which uses "Synthesized PGO" (heuristic-based branch frequencies). By replacing it with `[NoInlining]`, the JIT uses tiered compilation: Tier 0 → profile collection → Tier 1 with real PGO. The real branch frequency data allows the JIT to lay out the hot fast-path contiguously, dramatically improving performance for branch-heavy methods like DecompressUnsafe.
+
+## Phase 6: Compression PGO & Match Counting
+
+| # | Area | Change | Result |
+|---|------|--------|--------|
+| 1 | LZ4Codec | `[NoInlining]` on CompressMediumInput + CompressLargeInput for tiered PGO | ✅ Kept — 3-15% faster fast compress |
+| 2 | LZ4HC | `[NoInlining]` on CompressHCUnsafe + FindBestMatch + CompressHCInternal for PGO | ✅ Kept — 4-8% faster HC level 3 |
+| 3 | LZ4Codec | `[NoInlining]` on CompressUnsafe wrappers for PGO | ✅ Kept — enables PGO on dispatch path |
+| 4 | LZ4Codec | Scalar 8-byte fast path in LZ4_count before SIMD tiers | ✅ Kept — 2-11% faster compress (most matches are short) |
+| 5 | LZ4HC | Scalar 8-byte fast path in CountCommonBytes before SIMD tiers | ✅ Kept — 1-6% faster HC level 3 |
+| 6 | LZ4HC | Change CountCommonBytes SIMD tiers from `else if` to sequential `if` | ❌ Reverted — increased inlined code size, regressed HC 10-12% |
+
+## Current Performance vs K4os (as of Phase 6)
+
+- **HC compress**: 0.26–0.76× (24–74% faster) ✅
+- **Codec decompress**: 0.88–1.15× (improved from 0.89–1.17×) ✅
+- **1kb decompress**: 0.88–0.94× (now consistently faster) ✅

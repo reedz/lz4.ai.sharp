@@ -186,7 +186,7 @@ namespace LZ4Sharp
             public uint NextToUpdate;
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         private static int CompressHCInternal(HCContext ctx, byte[] source, byte[] destination, int sourceSize, int maxDestinationSize, int compressionLevel)
         {
             unsafe
@@ -201,7 +201,7 @@ namespace LZ4Sharp
             }
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         private static unsafe int CompressHCUnsafe(HCContext ctx, byte* source, byte* destination, int sourceSize, int maxDestinationSize, int compressionLevel, HashEntry* hashTable, ushort* chainTable)
         {
             var cParams = LevelParams[compressionLevel];
@@ -350,6 +350,16 @@ namespace LZ4Sharp
             byte* start = p1;
             if (p1 >= end) return 0;
 
+            // Scalar fast path: most matches are short (4-16 bytes)
+            if (p1 + sizeof(ulong) <= end && p2 + sizeof(ulong) <= end)
+            {
+                ulong diff = Unsafe.ReadUnaligned<ulong>(p1) ^ Unsafe.ReadUnaligned<ulong>(p2);
+                if (diff != 0)
+                    return (BitOperations.TrailingZeroCount(diff) >> 3);
+                p1 += sizeof(ulong);
+                p2 += sizeof(ulong);
+            }
+
             if (Vector512.IsHardwareAccelerated && p1 + 64 <= end && p2 + 64 <= end)
             {
                 while (p1 + 64 <= end && p2 + 64 <= end)
@@ -490,7 +500,7 @@ namespace LZ4Sharp
             return false;
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+        [MethodImpl(MethodImplOptions.NoInlining)]
         private static unsafe MatchInfo FindBestMatch(
             HCContext ctx,
             byte* srcBase,
