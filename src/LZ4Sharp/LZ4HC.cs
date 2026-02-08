@@ -111,6 +111,195 @@ namespace LZ4Sharp
             return LZ4Codec.CompressBound(inputSize);
         }
 
+        /// <summary>
+        /// Compress data using LZ4 HC mode with a pre-trained dictionary.
+        /// The same dictionary must be used for decompression via <see cref="LZ4Codec.DecompressWithDict(ReadOnlySpan{byte}, Span{byte}, ReadOnlySpan{byte})"/>.
+        /// </summary>
+        /// <param name="source">Data to compress</param>
+        /// <param name="destination">Buffer for compressed output</param>
+        /// <param name="dictionary">Dictionary data (max 64 KB used)</param>
+        /// <param name="compressionLevel">HC compression level (3-12)</param>
+        /// <returns>Compressed size in bytes, or 0/negative on failure</returns>
+        public static int CompressHCWithDict(ReadOnlySpan<byte> source, Span<byte> destination, ReadOnlySpan<byte> dictionary, int compressionLevel = CLEVEL_DEFAULT)
+        {
+            if (source.Length <= 0 || destination.Length <= 0)
+                return -1;
+
+            if (compressionLevel < CLEVEL_MIN) compressionLevel = CLEVEL_MIN;
+            if (compressionLevel > CLEVEL_MAX) compressionLevel = CLEVEL_MAX;
+
+            // Truncate dictionary to last 64KB
+            int dictSize = Math.Min(dictionary.Length, LZ4_DISTANCE_MAX);
+            if (dictSize > 0)
+                dictionary = dictionary.Slice(dictionary.Length - dictSize);
+
+            // Create contiguous [dict][source] buffer
+            int totalSize = dictSize + source.Length;
+            byte[] rentedBuffer = System.Buffers.ArrayPool<byte>.Shared.Rent(totalSize);
+            try
+            {
+                dictionary.CopyTo(rentedBuffer);
+                source.CopyTo(rentedBuffer.AsSpan(dictSize));
+
+                // Compress the source portion using the contiguous buffer
+                var fullSpan = rentedBuffer.AsSpan(0, totalSize);
+                var ctx = t_context ??= new HCContext();
+
+                unsafe
+                {
+                    fixed (byte* bufPtr = rentedBuffer)
+                    fixed (byte* dstPtr = destination)
+                    fixed (HashEntry* hashTable = ctx.HashTable)
+                    fixed (ushort* chainTable = ctx.ChainTable)
+                    {
+                        return CompressHCWithDictUnsafe(ctx, bufPtr, dstPtr, source.Length, destination.Length, compressionLevel, hashTable, chainTable, dictSize);
+                    }
+                }
+            }
+            finally
+            {
+                System.Buffers.ArrayPool<byte>.Shared.Return(rentedBuffer);
+            }
+        }
+
+        /// <summary>
+        /// Compress data using LZ4 HC mode with a pre-trained dictionary (byte[] overload).
+        /// </summary>
+        public static int CompressHCWithDict(byte[] source, byte[] destination, int sourceSize, int maxDestinationSize, byte[] dictionary, int compressionLevel = CLEVEL_DEFAULT)
+        {
+            if (source is null || destination is null || dictionary is null || sourceSize <= 0 || maxDestinationSize <= 0)
+                return -1;
+
+            return CompressHCWithDict(
+                source.AsSpan(0, sourceSize),
+                destination.AsSpan(0, maxDestinationSize),
+                dictionary.AsSpan(),
+                compressionLevel);
+        }
+
+        /// <summary>
+        /// HC compression with dictionary. Source data starts at source+dictSize in the contiguous buffer.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static unsafe int CompressHCWithDictUnsafe(HCContext ctx, byte* bufStart, byte* destination, int sourceSize, int maxDestinationSize, int compressionLevel, HashEntry* hashTable, ushort* chainTable, int dictSize)
+        {
+            byte* source = bufStart + dictSize;
+
+            var cParams = LevelParams[compressionLevel];
+            int srcPos = dictSize; // Start from source portion in the contiguous buffer
+            int dstPos = 0;
+            int anchor = dictSize;
+            int srcEnd = dictSize + sourceSize;
+            int srcLimit = srcEnd - MFLIMIT;
+            int dstEnd = maxDestinationSize;
+
+            // Reset state
+            ctx.CurrentTag++;
+            if (ctx.CurrentTag == 0)
+            {
+                Array.Clear(ctx.HashTable, 0, ctx.HashTable.Length);
+                ctx.CurrentTag = 1;
+            }
+            ctx.NextToUpdate = 0;
+
+            // Pre-fill hash/chain tables from dictionary
+            if (dictSize >= MINMATCH)
+            {
+                int dictStart = Math.Max(0, dictSize - LZ4_DISTANCE_MAX);
+                ctx.NextToUpdate = (uint)dictStart;
+                InsertAndUpdate(ctx, bufStart, hashTable, chainTable, (uint)dictSize);
+            }
+
+            srcPos++;
+
+            while (srcPos < srcLimit)
+            {
+                var match = FindBestMatch(ctx, bufStart, hashTable, chainTable, srcPos, srcEnd, cParams.NbSearches, cParams.TargetLength, srcPos - LZ4_DISTANCE_MAX);
+
+                if (match.Length < MINMATCH)
+                {
+                    srcPos++;
+                    continue;
+                }
+
+                int litLength = srcPos - anchor;
+                int matchLength = match.Length;
+                int offset = srcPos - match.Position;
+
+                int tokenPos = dstPos++;
+                if (dstPos + litLength / 255 + litLength + 2 + matchLength / 255 + LASTLITERALS > dstEnd)
+                    return 0;
+
+                if (litLength >= RUN_MASK)
+                {
+                    destination[tokenPos] = (byte)(RUN_MASK << ML_BITS);
+                    WriteLen255Unsafe(destination, ref dstPos, litLength - RUN_MASK);
+                }
+                else
+                {
+                    destination[tokenPos] = (byte)(litLength << ML_BITS);
+                }
+
+                if (litLength != 0)
+                {
+                    Unsafe.CopyBlockUnaligned(
+                        ref destination[dstPos],
+                        ref bufStart[anchor],
+                        (uint)litLength);
+                    dstPos += litLength;
+                }
+
+                if (s_isLittleEndian)
+                    Unsafe.WriteUnaligned(ref destination[dstPos], (ushort)offset);
+                else
+                {
+                    destination[dstPos] = (byte)offset;
+                    destination[dstPos + 1] = (byte)(offset >> 8);
+                }
+                dstPos += 2;
+
+                int mlCode = matchLength - MINMATCH;
+                if (mlCode >= ML_MASK)
+                {
+                    destination[tokenPos] += ML_MASK;
+                    WriteLen255Unsafe(destination, ref dstPos, mlCode - ML_MASK);
+                }
+                else
+                {
+                    destination[tokenPos] += (byte)mlCode;
+                }
+
+                srcPos += matchLength;
+                anchor = srcPos;
+            }
+
+            // Encode last literals (only from source portion)
+            int lastLiterals = srcEnd - anchor;
+            if (dstPos + lastLiterals / 255 + lastLiterals + 1 > dstEnd)
+                return 0;
+
+            if (lastLiterals >= RUN_MASK)
+            {
+                destination[dstPos++] = (byte)(RUN_MASK << ML_BITS);
+                WriteLen255Unsafe(destination, ref dstPos, lastLiterals - RUN_MASK);
+            }
+            else
+            {
+                destination[dstPos++] = (byte)(lastLiterals << ML_BITS);
+            }
+
+            if (lastLiterals != 0)
+            {
+                Unsafe.CopyBlockUnaligned(
+                    ref destination[dstPos],
+                    ref bufStart[anchor],
+                    (uint)lastLiterals);
+                dstPos += lastLiterals;
+            }
+
+            return dstPos;
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void WriteLen255(byte[] destination, ref int dstPos, int len)
         {

@@ -582,6 +582,472 @@ namespace LZ4Sharp
             return inputSize + 1;
         }
 
+        #region Dictionary compression
+
+        /// <summary>
+        /// Compress data using a pre-trained dictionary for better compression of small, similar messages.
+        /// The same dictionary must be used for decompression via <see cref="DecompressWithDict(ReadOnlySpan{byte}, Span{byte}, ReadOnlySpan{byte})"/>.
+        /// </summary>
+        /// <param name="source">Data to compress</param>
+        /// <param name="destination">Buffer for compressed output (use <see cref="CompressBound"/> to size)</param>
+        /// <param name="dictionary">Dictionary data (max 64 KB used; last 64 KB if larger)</param>
+        /// <param name="acceleration">Acceleration factor: 1 = default, higher = faster but worse ratio</param>
+        /// <returns>Compressed size in bytes, or 0/negative on failure</returns>
+        public static int CompressWithDict(ReadOnlySpan<byte> source, Span<byte> destination, ReadOnlySpan<byte> dictionary, int acceleration = 1)
+        {
+            if (source.Length <= 0 || destination.Length <= 0)
+                return -1;
+
+            acceleration = NormalizeAcceleration(acceleration);
+
+            // Truncate dictionary to last 64KB (LZ4 distance limit)
+            int dictSize = Math.Min(dictionary.Length, LZ4_DISTANCE_MAX);
+            if (dictSize > 0)
+                dictionary = dictionary.Slice(dictionary.Length - dictSize);
+
+            // Create contiguous [dict][source] buffer so matches can reference dictionary data
+            int totalSize = dictSize + source.Length;
+            byte[] rentedBuffer = ArrayPool<byte>.Shared.Rent(totalSize);
+            try
+            {
+                dictionary.CopyTo(rentedBuffer);
+                source.CopyTo(rentedBuffer.AsSpan(dictSize));
+
+                fixed (byte* bufPtr = rentedBuffer)
+                fixed (byte* dstPtr = destination)
+                {
+                    byte* srcStart = bufPtr + dictSize;
+                    return CompressWithDictUnsafe(srcStart, dstPtr, source.Length, destination.Length, acceleration, bufPtr, dictSize);
+                }
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(rentedBuffer);
+            }
+        }
+
+        /// <summary>
+        /// Compress data using a pre-trained dictionary (byte[] overload).
+        /// </summary>
+        public static int CompressWithDict(byte[] source, byte[] destination, int sourceSize, int maxDestinationSize, byte[] dictionary, int acceleration = 1)
+        {
+            if (source is null || destination is null || dictionary is null || sourceSize <= 0 || maxDestinationSize <= 0)
+                return -1;
+
+            return CompressWithDict(
+                source.AsSpan(0, sourceSize),
+                destination.AsSpan(0, maxDestinationSize),
+                dictionary.AsSpan(),
+                acceleration);
+        }
+
+        /// <summary>
+        /// Compress data using the default LZ4 algorithm (HC at minimum level) with a pre-trained dictionary.
+        /// The same dictionary must be used for decompression via <see cref="DecompressWithDict(ReadOnlySpan{byte}, Span{byte}, ReadOnlySpan{byte})"/>.
+        /// </summary>
+        public static int CompressDefaultWithDict(ReadOnlySpan<byte> source, Span<byte> destination, ReadOnlySpan<byte> dictionary)
+        {
+            return LZ4HC.CompressHCWithDict(source, destination, dictionary, LZ4HC.CLEVEL_MIN);
+        }
+
+        /// <summary>
+        /// Compress data using the default LZ4 algorithm (HC at minimum level) with a pre-trained dictionary (byte[] overload).
+        /// </summary>
+        public static int CompressDefaultWithDict(byte[] source, byte[] destination, int sourceSize, int maxDestinationSize, byte[] dictionary)
+        {
+            if (source is null || destination is null || dictionary is null || sourceSize <= 0 || maxDestinationSize <= 0)
+                return -1;
+
+            return LZ4HC.CompressHCWithDict(
+                source.AsSpan(0, sourceSize),
+                destination.AsSpan(0, maxDestinationSize),
+                dictionary.AsSpan(),
+                LZ4HC.CLEVEL_MIN);
+        }
+
+        /// <summary>
+        /// Core dictionary compression. source must be preceded by dictSize bytes of dictionary data
+        /// in contiguous memory (i.e., source - dictSize points to the dictionary).
+        /// </summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static int CompressWithDictUnsafe(byte* source, byte* dest, int inputSize, int maxOutputSize, int acceleration, byte* dictStart, int dictSize)
+        {
+            if (inputSize < MFLIMIT)
+                return CompressSmallUnsafe(source, dest, inputSize, maxOutputSize);
+
+            byte* ip = source;
+            byte* ibase = dictStart; // Base includes dictionary for offset computation
+            byte* iend = source + inputSize;
+            byte* mflimitPlusOne = iend - MFLIMIT + 1;
+            byte* matchlimit = iend - LASTLITERALS;
+
+            byte* op = dest;
+            byte* olimit = dest + maxOutputSize;
+            byte* anchor = source;
+
+            // Use thread-local hash table
+            uint[] hashTableArray = t_hashTable ??= new uint[HASH_SIZE];
+            Array.Clear(hashTableArray);
+
+            fixed (uint* hashTable = hashTableArray)
+            {
+                // Pre-fill hash table from dictionary
+                if (dictSize >= MINMATCH)
+                {
+                    byte* dictEnd = source; // dict ends where source begins
+                    byte* dp = dictStart;
+                    // Only hash positions within LZ4_DISTANCE_MAX of source start
+                    if (dictSize > LZ4_DISTANCE_MAX)
+                        dp = dictEnd - LZ4_DISTANCE_MAX;
+                    while (dp <= dictEnd - MINMATCH)
+                    {
+                        uint h = Hash4(dp);
+                        hashTable[h] = (uint)(dp - ibase);
+                        dp++;
+                    }
+                }
+
+                // First byte of source
+                uint h0 = Hash4(ip);
+                hashTable[h0] = (uint)(ip - ibase);
+                ip++;
+                uint forwardH = Hash4(ip);
+
+                // Main loop (same as CompressMediumInput but with dictionary-aware base)
+                for (;;)
+                {
+                    byte* match;
+                    byte* token;
+
+                    // Find a match
+                    {
+                        byte* forwardIp = ip;
+                        int step = 1;
+                        int searchMatchNb = acceleration << LZ4_SKIP_TRIGGER;
+
+                        do
+                        {
+                            ip = forwardIp;
+                            forwardIp += step;
+                            if (forwardIp > mflimitPlusOne)
+                                goto _last_literals;
+
+                            step = searchMatchNb++ >> LZ4_SKIP_TRIGGER;
+
+                            uint h = forwardH;
+                            forwardH = Hash4(forwardIp);
+                            match = GetPositionOnHash(h, hashTable, ibase);
+                            hashTable[h] = (uint)(ip - ibase);
+                        }
+                        while ((Peek4(match) != Peek4(ip)) || (ip - match > LZ4_DISTANCE_MAX));
+                    }
+
+                    // Catch up — only within source (don't go before source start)
+                    while ((ip > anchor) && (match > dictStart) && (ip[-1] == match[-1]))
+                    {
+                        ip--;
+                        match--;
+                    }
+
+                    // Encode literals
+                    {
+                        uint litLength = (uint)(ip - anchor);
+                        token = op++;
+
+                        if (op + litLength + (2 + 1 + LASTLITERALS) + (litLength / 255) > olimit)
+                            return 0;
+
+                        if (litLength >= RUN_MASK)
+                        {
+                            int len = (int)(litLength - RUN_MASK);
+                            *token = (byte)(RUN_MASK << ML_BITS);
+                            while (len >= 4 * 255)
+                            {
+                                *(uint*)op = 0xFFFFFFFF;
+                                op += 4;
+                                len -= 4 * 255;
+                            }
+                            while (len >= 255)
+                            {
+                                *op++ = 255;
+                                len -= 255;
+                            }
+                            *op++ = (byte)len;
+                        }
+                        else
+                        {
+                            *token = (byte)(litLength << ML_BITS);
+                        }
+
+                        WildCopy8(op, anchor, op + litLength);
+                        op += litLength;
+                    }
+
+                _next_match:
+                    // Encode offset
+                    Poke2(op, (ushort)(ip - match));
+                    op += 2;
+
+                    // Encode match length
+                    {
+                        // Count match length only within source bounds
+                        byte* matchLimitForCount = matchlimit;
+                        uint matchCode = LZ4_count(ip + MINMATCH, match + MINMATCH, matchLimitForCount);
+                        ip += matchCode + MINMATCH;
+
+                        if (op + (1 + LASTLITERALS) + (matchCode + 240) / 255 > olimit)
+                            return 0;
+
+                        if (matchCode >= ML_MASK)
+                        {
+                            *token += ML_MASK;
+                            matchCode -= ML_MASK;
+                            while (matchCode >= 4 * 255)
+                            {
+                                *(uint*)op = 0xFFFFFFFF;
+                                op += 4;
+                                matchCode -= 4 * 255;
+                            }
+                            while (matchCode >= 255)
+                            {
+                                *op++ = 255;
+                                matchCode -= 255;
+                            }
+                            *op++ = (byte)matchCode;
+                        }
+                        else
+                        {
+                            *token += (byte)matchCode;
+                        }
+                    }
+
+                    anchor = ip;
+
+                    // Test end of chunk
+                    if (ip >= mflimitPlusOne)
+                        goto _last_literals;
+
+                    // Re-probe
+                    {
+                        uint h2 = Hash4(ip - 2);
+                        hashTable[h2] = (uint)(ip - 2 - ibase);
+
+                        uint h = Hash4(ip);
+                        match = GetPositionOnHash(h, hashTable, ibase);
+                        hashTable[h] = (uint)(ip - ibase);
+
+                        if ((Peek4(match) == Peek4(ip)) && (ip - match <= LZ4_DISTANCE_MAX))
+                        {
+                            token = op++;
+                            *token = 0;
+                            goto _next_match;
+                        }
+
+                        forwardH = Hash4(++ip);
+                    }
+                }
+
+            _last_literals:
+                // Encode last literals
+                {
+                    int lastRun = (int)(iend - anchor);
+                    if (op + 1 + lastRun + (lastRun + 240) / 255 > olimit)
+                        return 0;
+
+                    if (lastRun >= RUN_MASK)
+                    {
+                        *op++ = (byte)(RUN_MASK << ML_BITS);
+                        int remaining = lastRun - RUN_MASK;
+                        while (remaining >= 255)
+                        {
+                            *op++ = 255;
+                            remaining -= 255;
+                        }
+                        *op++ = (byte)remaining;
+                    }
+                    else
+                    {
+                        *op++ = (byte)(lastRun << ML_BITS);
+                    }
+
+                    Buffer.MemoryCopy(anchor, op, olimit - op, lastRun);
+                    op += lastRun;
+                }
+
+                return (int)(op - dest);
+            }
+        }
+
+        #endregion
+
+        #region Dictionary decompression
+
+        /// <summary>
+        /// Decompress LZ4 data that was compressed with a dictionary.
+        /// The dictionary must be identical to the one used during compression.
+        /// </summary>
+        /// <param name="source">Compressed data</param>
+        /// <param name="destination">Buffer for decompressed output</param>
+        /// <param name="dictionary">Dictionary used during compression</param>
+        /// <returns>Decompressed size in bytes, or negative on failure</returns>
+        public static int DecompressWithDict(ReadOnlySpan<byte> source, Span<byte> destination, ReadOnlySpan<byte> dictionary)
+        {
+            // Truncate to last 64KB
+            int dictSize = Math.Min(dictionary.Length, LZ4_DISTANCE_MAX);
+            if (dictSize > 0)
+                dictionary = dictionary.Slice(dictionary.Length - dictSize);
+
+            fixed (byte* srcPtr = source)
+            fixed (byte* dstPtr = destination)
+            fixed (byte* dictPtr = dictionary)
+            {
+                return DecompressUnsafeWithDict(srcPtr, dstPtr, source.Length, destination.Length, dictPtr, dictSize);
+            }
+        }
+
+        /// <summary>
+        /// Decompress LZ4 data that was compressed with a dictionary (byte[] overload).
+        /// </summary>
+        public static int DecompressWithDict(byte[] source, byte[] destination, int compressedSize, int maxDecompressedSize, byte[] dictionary)
+        {
+            if (source is null || destination is null || dictionary is null || compressedSize < 0 || maxDecompressedSize < 0)
+                return -1;
+
+            return DecompressWithDict(
+                source.AsSpan(0, compressedSize),
+                destination.AsSpan(0, maxDecompressedSize),
+                dictionary.AsSpan());
+        }
+
+        /// <summary>
+        /// Core dictionary decompression. Handles match offsets that reference dictionary data.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static int DecompressUnsafeWithDict(byte* source, byte* dest, int compressedSize, int outputSize, byte* dict, int dictSize)
+        {
+            byte* ip = source;
+            byte* iend = source + compressedSize;
+
+            byte* op = dest;
+            byte* oend = dest + outputSize;
+            byte* cpy;
+
+            byte* dictEnd = dict + dictSize;
+
+            while (ip < iend)
+            {
+                // Get literal length
+                uint token = *ip++;
+                uint length = token >> ML_BITS;
+
+                // Decode literal length
+                if (length == RUN_MASK)
+                {
+                    uint s;
+                    do
+                    {
+                        if (ip >= iend) return -1;
+                        s = *ip++;
+                        length += s;
+                    } while (s == 255);
+                }
+
+                // Copy literals
+                cpy = op + length;
+                if (cpy > oend || ip + length > iend)
+                    return -1;
+
+                Buffer.MemoryCopy(ip, op, oend - op, length);
+                ip += length;
+                op = cpy;
+
+                if (ip >= iend)
+                    break;
+
+                // Get offset
+                uint offset = Peek2(ip);
+                ip += 2;
+
+                if (offset == 0)
+                    return -1;
+
+                // Get match length
+                length = token & ML_MASK;
+                if (length == ML_MASK)
+                {
+                    uint s;
+                    do
+                    {
+                        if (ip >= iend) return -1;
+                        s = *ip++;
+                        length += s;
+                    } while (s == 255);
+                }
+                length += MINMATCH;
+
+                cpy = op + length;
+                if (cpy > oend)
+                    return -1;
+
+                byte* match = op - offset;
+
+                if (match >= dest)
+                {
+                    // Match is within output buffer — standard copy
+                    if (offset < 8)
+                    {
+                        op[0] = match[0];
+                        op[1] = match[1];
+                        op[2] = match[2];
+                        op[3] = match[3];
+                        match += Inc32Table[offset];
+                        Poke4(op + 4, Peek4(match));
+                        match -= Dec64Table[offset];
+                        op += 8;
+                        while (op < cpy) { *op++ = *match++; }
+                    }
+                    else
+                    {
+                        // Standard non-overlapping copy
+                        do
+                        {
+                            Copy8(op, match);
+                            op += 8;
+                            match += 8;
+                        } while (op < cpy);
+                    }
+                    op = cpy;
+                }
+                else
+                {
+                    // Match references dictionary data
+                    int dictOffset = (int)(dest - match);
+                    if (dictOffset > dictSize)
+                        return -1; // Invalid: references before dictionary
+
+                    byte* dictMatch = dictEnd - dictOffset;
+                    int copyFromDict = (int)Math.Min(length, (uint)(dictEnd - dictMatch));
+
+                    // Copy from dictionary (byte-by-byte, dictionary and output don't overlap)
+                    for (int i = 0; i < copyFromDict; i++)
+                        *op++ = *dictMatch++;
+
+                    // If match extends into output buffer, copy remainder from output
+                    if (copyFromDict < (int)length)
+                    {
+                        match = dest; // Continuation starts at beginning of output
+                        int remaining = (int)length - copyFromDict;
+                        while (remaining-- > 0)
+                            *op++ = *match++;
+                    }
+                }
+            }
+
+            return (int)(op - dest);
+        }
+
+        #endregion
+
         /// <summary>
         /// Decompress LZ4 compressed data safely
         /// </summary>

@@ -11,6 +11,7 @@ A high-performance **C#/.NET** implementation of the **LZ4** compression algorit
 
 - **Fast Compression** (`LZ4Codec`) — Optimized for speed with competitive compression ratios
 - **High Compression** (`LZ4HC`) — Better compression ratios at slower speeds
+- **Dictionary Compression** — Pre-trained dictionaries for superior small-message compression
 - **Frame Format** (`LZ4Frame`) — Stream-oriented API with checksums and metadata
 - **XXHash** — Fast non-cryptographic hash function
 - **Pure Managed C#** — No external native library dependencies, runs on any .NET platform (uses unsafe code for performance)
@@ -46,6 +47,30 @@ using LZ4Sharp;
 byte[] compressed = new byte[LZ4HC.CompressBound(input.Length)];
 int compressedSize = LZ4HC.CompressHC(input, compressed, input.Length, compressed.Length);
 ```
+
+### Dictionary Compression
+
+Dictionary compression dramatically improves ratios for small, similar messages (e.g., JSON API responses, log lines, protocol buffers) by pre-training on representative data.
+
+```csharp
+using LZ4Sharp;
+
+// Build a dictionary from representative samples
+byte[] dictionary = BuildDictionaryFromSamples();
+
+// Compress with dictionary (fast mode)
+byte[] compressed = new byte[LZ4Codec.CompressBound(data.Length)];
+int compressedSize = LZ4Codec.CompressWithDict(data, compressed, data.Length, compressed.Length, dictionary);
+
+// Decompress with the SAME dictionary
+byte[] decompressed = new byte[originalSize];
+int size = LZ4Codec.DecompressWithDict(compressed, decompressed, compressedSize, decompressed.Length, dictionary);
+
+// HC dictionary compression for better ratios
+int hcSize = LZ4HC.CompressHCWithDict(data.AsSpan(), compressed, dictionary.AsSpan(), compressionLevel: 9);
+```
+
+> **Note:** Both compressor and decompressor must use the identical dictionary. Only the last 64 KB of the dictionary is used. Span overloads are also available for zero-copy scenarios.
 
 ## Performance
 
