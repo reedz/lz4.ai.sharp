@@ -29,6 +29,7 @@ namespace LZ4Sharp.Streams
         private bool _disposed;
         private XXHash.XXH32State? _contentChecksumState;
         private readonly byte[] _asyncHeaderBuf = new byte[4];
+        private readonly int _compressionLevel;
 
         // Frame format constants
         private const uint LZ4F_MAGICNUMBER = 0x184D2204;
@@ -49,6 +50,7 @@ namespace LZ4Sharp.Streams
             _outputBuffer = ArrayPool<byte>.Shared.Rent(LZ4Codec.CompressBound(_settings.BlockSize) + 4);
             _inputBufferPos = 0;
             _headerWritten = false;
+            _compressionLevel = _settings.GetInternalCompressionLevel();
 
             if (_settings.ContentChecksum)
             {
@@ -159,14 +161,23 @@ namespace LZ4Sharp.Streams
                 _headerWritten = true;
             }
 
+            int blockSize = _settings.BlockSize;
+
+            // Fast path: compress full blocks directly from user buffer (skip _inputBuffer copy)
+            while (_inputBufferPos == 0 && buffer.Length >= blockSize)
+            {
+                await FlushBlockDirectAsync(buffer.Slice(0, blockSize), cancellationToken).ConfigureAwait(false);
+                buffer = buffer.Slice(blockSize);
+            }
+
             while (buffer.Length > 0)
             {
-                int bytesToCopy = Math.Min(buffer.Length, _settings.BlockSize - _inputBufferPos);
+                int bytesToCopy = Math.Min(buffer.Length, blockSize - _inputBufferPos);
                 buffer.Slice(0, bytesToCopy).Span.CopyTo(_inputBuffer.AsSpan(_inputBufferPos));
                 _inputBufferPos += bytesToCopy;
                 buffer = buffer.Slice(bytesToCopy);
 
-                if (_inputBufferPos >= _settings.BlockSize)
+                if (_inputBufferPos >= blockSize)
                 {
                     await FlushBlockAsync(cancellationToken).ConfigureAwait(false);
                 }
@@ -225,18 +236,17 @@ namespace LZ4Sharp.Streams
             }
             else
             {
-                // Header only from output buffer, then uncompressed from input buffer
-                _innerStream.Write(_outputBuffer.AsSpan(0, 4));
-                _innerStream.Write(_inputBuffer.AsSpan(0, _inputBufferPos));
+                // Stage uncompressed data into _outputBuffer for single write
+                _inputBuffer.AsSpan(0, _inputBufferPos).CopyTo(_outputBuffer.AsSpan(4));
+                _innerStream.Write(_outputBuffer.AsSpan(0, 4 + _inputBufferPos));
             }
 
             // Write block checksum if enabled
             if (_settings.BlockChecksum)
             {
-                byte[] blockData = useCompressed ? _outputBuffer! : _inputBuffer!;
-                int blockOff = useCompressed ? 4 : 0;
+                // Both paths now have block data at _outputBuffer[4..]
                 int blockLen = useCompressed ? compressedSize : _inputBufferPos;
-                uint checksum = XXHash.XXH32((ReadOnlySpan<byte>)blockData.AsSpan(blockOff, blockLen), 0);
+                uint checksum = XXHash.XXH32((ReadOnlySpan<byte>)_outputBuffer.AsSpan(4, blockLen), 0);
 
                 Span<byte> checksumBytes = stackalloc byte[4];
                 BinaryPrimitives.WriteUInt32LittleEndian(checksumBytes, checksum);
@@ -275,8 +285,9 @@ namespace LZ4Sharp.Streams
             }
             else
             {
-                _innerStream.Write(_outputBuffer.AsSpan(0, 4));
-                _innerStream.Write(source);
+                // Stage uncompressed data into _outputBuffer for single write
+                source.CopyTo(_outputBuffer.AsSpan(4));
+                _innerStream.Write(_outputBuffer.AsSpan(0, 4 + blockSize));
             }
 
             if (_settings.BlockChecksum)
@@ -289,6 +300,52 @@ namespace LZ4Sharp.Streams
                 Span<byte> checksumBytes = stackalloc byte[4];
                 BinaryPrimitives.WriteUInt32LittleEndian(checksumBytes, checksum);
                 _innerStream.Write(checksumBytes);
+            }
+        }
+
+        /// <summary>
+        /// Async version of FlushBlockDirect — compress and write a full block directly from source.
+        /// </summary>
+        private async ValueTask FlushBlockDirectAsync(ReadOnlyMemory<byte> source, CancellationToken cancellationToken)
+        {
+            int blockSize = source.Length;
+
+            if (_contentChecksumState != null)
+            {
+                XXHash.XXH32Update(_contentChecksumState, source.Span);
+            }
+
+            int compressedSize = CompressBlock(source.Span, _outputBuffer.AsSpan(4));
+
+            bool useCompressed = compressedSize > 0 && compressedSize < blockSize;
+            int blockDataSize = useCompressed ? compressedSize : blockSize;
+
+            uint blockHeader = (uint)blockDataSize;
+            if (!useCompressed)
+                blockHeader |= 0x80000000;
+
+            BinaryPrimitives.WriteUInt32LittleEndian(_outputBuffer.AsSpan(), blockHeader);
+
+            if (useCompressed)
+            {
+                await _innerStream.WriteAsync(_outputBuffer.AsMemory(0, 4 + compressedSize), cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                // Stage uncompressed data into _outputBuffer for single write
+                source.Span.CopyTo(_outputBuffer.AsSpan(4));
+                await _innerStream.WriteAsync(_outputBuffer.AsMemory(0, 4 + blockSize), cancellationToken).ConfigureAwait(false);
+            }
+
+            if (_settings.BlockChecksum)
+            {
+                ReadOnlySpan<byte> blockData = useCompressed
+                    ? _outputBuffer.AsSpan(4, compressedSize)
+                    : source.Span;
+                uint checksum = XXHash.XXH32(blockData, 0);
+
+                BinaryPrimitives.WriteUInt32LittleEndian(_asyncHeaderBuf.AsSpan(), checksum);
+                await _innerStream.WriteAsync(_asyncHeaderBuf, cancellationToken).ConfigureAwait(false);
             }
         }
 
@@ -322,18 +379,17 @@ namespace LZ4Sharp.Streams
             }
             else
             {
-                // Header only from output buffer, then uncompressed from input buffer
-                await _innerStream.WriteAsync(_outputBuffer.AsMemory(0, 4), cancellationToken).ConfigureAwait(false);
-                await _innerStream.WriteAsync(_inputBuffer.AsMemory(0, _inputBufferPos), cancellationToken).ConfigureAwait(false);
+                // Stage uncompressed data into _outputBuffer for single write
+                _inputBuffer.AsSpan(0, _inputBufferPos).CopyTo(_outputBuffer.AsSpan(4));
+                await _innerStream.WriteAsync(_outputBuffer.AsMemory(0, 4 + _inputBufferPos), cancellationToken).ConfigureAwait(false);
             }
 
             // Write block checksum if enabled
             if (_settings.BlockChecksum)
             {
-                byte[] blockData = useCompressed ? _outputBuffer! : _inputBuffer!;
-                int blockOff = useCompressed ? 4 : 0;
+                // Both paths now have block data at _outputBuffer[4..]
                 int blockLen = useCompressed ? compressedSize : _inputBufferPos;
-                uint checksum = XXHash.XXH32((ReadOnlySpan<byte>)blockData.AsSpan(blockOff, blockLen), 0);
+                uint checksum = XXHash.XXH32((ReadOnlySpan<byte>)_outputBuffer.AsSpan(4, blockLen), 0);
 
                 BinaryPrimitives.WriteUInt32LittleEndian(_asyncHeaderBuf.AsSpan(), checksum);
                 await _innerStream.WriteAsync(_asyncHeaderBuf, cancellationToken).ConfigureAwait(false);
@@ -349,7 +405,7 @@ namespace LZ4Sharp.Streams
 
         private int CompressBlock(ReadOnlySpan<byte> source, Span<byte> dest)
         {
-            int level = _settings.GetInternalCompressionLevel();
+            int level = _compressionLevel;
 
             if (level < 0)
             {

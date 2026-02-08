@@ -95,6 +95,34 @@ namespace LZ4Sharp.Streams
         public override void Flush() { }
 
         /// <inheritdoc/>
+        public override void CopyTo(Stream destination, int bufferSize)
+        {
+            // Eagerly read header so we know _blockMaxSize
+            if (!_headerRead && !_disposed && !_endOfFrame)
+            {
+                ReadFrameHeader();
+                _headerRead = true;
+            }
+            // Ensure buffer >= _blockMaxSize so ReadCore takes the direct path
+            if (_headerRead && bufferSize < _blockMaxSize)
+                bufferSize = _blockMaxSize;
+            base.CopyTo(destination, bufferSize);
+        }
+
+        /// <inheritdoc/>
+        public override async Task CopyToAsync(Stream destination, int bufferSize, CancellationToken cancellationToken)
+        {
+            if (!_headerRead && !_disposed && !_endOfFrame)
+            {
+                await ReadFrameHeaderAsync(cancellationToken).ConfigureAwait(false);
+                _headerRead = true;
+            }
+            if (_headerRead && bufferSize < _blockMaxSize)
+                bufferSize = _blockMaxSize;
+            await base.CopyToAsync(destination, bufferSize, cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <inheritdoc/>
         public override int Read(byte[] buffer, int offset, int count)
         {
             ValidateBufferArguments(buffer, offset, count);
@@ -402,7 +430,15 @@ namespace LZ4Sharp.Streams
                 throw new InvalidDataException($"Block size {blockSize} exceeds maximum {_blockMaxSize}");
 
             // Read block data
-            ReadExact(_compressedBlockBuffer.AsSpan(0, blockSize));
+            if (isCompressed)
+            {
+                ReadExact(_compressedBlockBuffer.AsSpan(0, blockSize));
+            }
+            else
+            {
+                // Read uncompressed data directly into decompressed buffer
+                ReadExact(_decompressedBuffer.AsSpan(0, blockSize));
+            }
 
             // Read and verify block checksum if present
             if (_blockChecksum)
@@ -410,12 +446,15 @@ namespace LZ4Sharp.Streams
                 Span<byte> checksumBytes = stackalloc byte[4];
                 ReadExact(checksumBytes);
                 uint storedChecksum = BinaryPrimitives.ReadUInt32LittleEndian(checksumBytes);
-                uint calculatedChecksum = XXHash.XXH32(_compressedBlockBuffer!, blockSize, 0);
+                ReadOnlySpan<byte> blockData = isCompressed
+                    ? _compressedBlockBuffer.AsSpan(0, blockSize)
+                    : _decompressedBuffer.AsSpan(0, blockSize);
+                uint calculatedChecksum = XXHash.XXH32(blockData, 0);
                 if (storedChecksum != calculatedChecksum)
                     throw new InvalidDataException("Block checksum mismatch");
             }
 
-            // Decompress or copy
+            // Decompress or set length
             if (isCompressed)
             {
                 int decompressedSize = LZ4Codec.DecompressSafe(
@@ -427,8 +466,7 @@ namespace LZ4Sharp.Streams
             }
             else
             {
-                // Uncompressed block
-                _compressedBlockBuffer.AsSpan(0, blockSize).CopyTo(_decompressedBuffer);
+                // Already read directly into _decompressedBuffer
                 _decompressedBufferLen = blockSize;
             }
 
@@ -475,14 +513,19 @@ namespace LZ4Sharp.Streams
             if (blockSize > _blockMaxSize)
                 throw new InvalidDataException($"Block size {blockSize} exceeds maximum {_blockMaxSize}");
 
-            ReadExact(_compressedBlockBuffer.AsSpan(0, blockSize));
+            ReadExact(isCompressed
+                ? _compressedBlockBuffer.AsSpan(0, blockSize)
+                : target.Slice(0, blockSize));
 
             if (_blockChecksum)
             {
                 Span<byte> checksumBytes = stackalloc byte[4];
                 ReadExact(checksumBytes);
                 uint storedChecksum = BinaryPrimitives.ReadUInt32LittleEndian(checksumBytes);
-                uint calculatedChecksum = XXHash.XXH32(_compressedBlockBuffer!, blockSize, 0);
+                ReadOnlySpan<byte> blockData = isCompressed
+                    ? _compressedBlockBuffer.AsSpan(0, blockSize)
+                    : target.Slice(0, blockSize);
+                uint calculatedChecksum = XXHash.XXH32(blockData, 0);
                 if (storedChecksum != calculatedChecksum)
                     throw new InvalidDataException("Block checksum mismatch");
             }
@@ -497,7 +540,7 @@ namespace LZ4Sharp.Streams
             }
             else
             {
-                _compressedBlockBuffer.AsSpan(0, blockSize).CopyTo(target);
+                // Already read directly into target
                 decompressedSize = blockSize;
             }
 
@@ -546,19 +589,30 @@ namespace LZ4Sharp.Streams
                 throw new InvalidDataException($"Block size {blockSize} exceeds maximum {_blockMaxSize}");
 
             // Read block data
-            await ReadExactAsync(_compressedBlockBuffer.AsMemory(0, blockSize), cancellationToken).ConfigureAwait(false);
+            if (isCompressed)
+            {
+                await ReadExactAsync(_compressedBlockBuffer.AsMemory(0, blockSize), cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                // Read uncompressed data directly into decompressed buffer
+                await ReadExactAsync(_decompressedBuffer.AsMemory(0, blockSize), cancellationToken).ConfigureAwait(false);
+            }
 
             // Read and verify block checksum if present
             if (_blockChecksum)
             {
                 await ReadExactAsync(_asyncHeaderBuf.AsMemory(0, 4), cancellationToken).ConfigureAwait(false);
                 uint storedChecksum = BinaryPrimitives.ReadUInt32LittleEndian(_asyncHeaderBuf.AsSpan());
-                uint calculatedChecksum = XXHash.XXH32(_compressedBlockBuffer!, blockSize, 0);
+                ReadOnlySpan<byte> blockData = isCompressed
+                    ? _compressedBlockBuffer.AsSpan(0, blockSize)
+                    : _decompressedBuffer.AsSpan(0, blockSize);
+                uint calculatedChecksum = XXHash.XXH32(blockData, 0);
                 if (storedChecksum != calculatedChecksum)
                     throw new InvalidDataException("Block checksum mismatch");
             }
 
-            // Decompress or copy
+            // Decompress or set length
             if (isCompressed)
             {
                 int decompressedSize = LZ4Codec.DecompressSafe(
@@ -570,7 +624,7 @@ namespace LZ4Sharp.Streams
             }
             else
             {
-                _compressedBlockBuffer.AsSpan(0, blockSize).CopyTo(_decompressedBuffer);
+                // Already read directly into _decompressedBuffer
                 _decompressedBufferLen = blockSize;
             }
 
