@@ -70,7 +70,7 @@ int size = LZ4Codec.DecompressWithDict(compressed, decompressed, compressedSize,
 int hcSize = LZ4HC.CompressHCWithDict(data.AsSpan(), compressed, dictionary.AsSpan(), compressionLevel: 9);
 ```
 
-> **Note:** Both compressor and decompressor must use the identical dictionary. Only the last 64 KB of the dictionary is used. Span overloads are also available for zero-copy scenarios.
+> **Note:** Both compressor and decompressor must use the identical dictionary. Only the last 64 KB of the dictionary is used. Span overloads are also available for zero-copy scenarios. See [DICTIONARY-GUIDE.md](DICTIONARY-GUIDE.md) for a complete guide on building and using dictionaries.
 
 ## Performance
 
