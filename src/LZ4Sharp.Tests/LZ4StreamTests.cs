@@ -61,6 +61,38 @@ public class LZ4StreamTests
         Assert.Equal(original, result.ToArray());
     }
 
+    /// <summary>
+    /// Regression test: WildCopy8 tail handler after SIMD copies must handle remainders > 8 bytes.
+    /// A 270-byte payload produces a 75-byte literal run; after one 64-byte AVX-512 copy,
+    /// 11 bytes remain and all must be copied. Previously only the last 8 were written.
+    /// </summary>
+    [Theory]
+    [InlineData(LZ4CompressionLevel.Fast)]
+    [InlineData(LZ4CompressionLevel.Level0)]
+    public void RoundTrip_SmallPayload_CopyToPattern(LZ4CompressionLevel level)
+    {
+        var original = Encoding.UTF8.GetBytes(
+            "This is test data for LZ4 compression. " +
+            "It should be long enough to actually compress. " +
+            "Repeated patterns help: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa " +
+            "More repeated patterns: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb " +
+            "And some JSON-like content: {\"key\": \"value\", \"number\": 12345}");
+
+        using var compressed = new MemoryStream();
+        using (var encoder = Streams.LZ4Stream.Encode(compressed, level, leaveOpen: true))
+        {
+            using var input = new MemoryStream(original);
+            input.CopyTo(encoder);
+        }
+
+        compressed.Position = 0;
+        using var decoder = Streams.LZ4Stream.Decode(compressed);
+        using var output = new MemoryStream();
+        decoder.CopyTo(output);
+
+        Assert.Equal(original, output.ToArray());
+    }
+
     [Fact]
     public void RoundTrip_MultiBlock()
     {

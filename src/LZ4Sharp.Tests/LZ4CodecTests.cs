@@ -206,5 +206,33 @@ namespace LZ4Sharp.Tests
             Assert.Equal(source.Length, decompressedSize);
             Assert.Equal(source, decompressed);
         }
+
+        /// <summary>
+        /// Regression: CompressFast with a 270-byte payload whose first literal run (75 bytes)
+        /// triggers a SIMD remainder > 8 bytes in WildCopy8. Previously the tail handler only
+        /// wrote the last 8 bytes, leaving a gap of zeroes.
+        /// </summary>
+        [Theory]
+        [InlineData(1)]
+        [InlineData(2)]
+        [InlineData(8)]
+        public void CompressFast_SmallInput_RoundTripsCorrectly(int acceleration)
+        {
+            var source = Encoding.UTF8.GetBytes(
+                "This is test data for LZ4 compression. " +
+                "It should be long enough to actually compress. " +
+                "Repeated patterns help: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa " +
+                "More repeated patterns: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb " +
+                "And some JSON-like content: {\"key\": \"value\", \"number\": 12345}");
+
+            var compressed = new byte[LZ4Codec.CompressBound(source.Length)];
+            int compSize = LZ4Codec.CompressFast(source.AsSpan(), compressed.AsSpan(), acceleration);
+            Assert.True(compSize > 0);
+
+            var decompressed = new byte[source.Length];
+            int decSize = LZ4Codec.DecompressSafe(compressed.AsSpan(0, compSize), decompressed.AsSpan());
+            Assert.Equal(source.Length, decSize);
+            Assert.Equal(source, decompressed);
+        }
     }
 }

@@ -1637,12 +1637,12 @@ copyMatch:
                 }
             }
             
-            // Handle remaining bytes with overlapping 8-byte write
-            // This eliminates loop overhead for the tail (1-7 bytes)
-            if (dst < dstEnd)
+            // Handle remaining bytes with 8-byte wild copies
+            while (dst < dstEnd)
             {
-                // Use overlapping write: write last 8 bytes which covers any remainder
-                Copy8(dstEnd - 8, src + (dstEnd - dst) - 8);
+                Copy8(dst, src);
+                dst += 8;
+                src += 8;
             }
         }
 
