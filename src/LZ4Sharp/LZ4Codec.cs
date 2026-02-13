@@ -1284,19 +1284,19 @@ copyMatch:
                     match -= Dec64Table[offset];
                     op += 8;
 
-                    // Continue with overlapping copy using tail optimization
+                    // Continue with overlapping 8-byte copies
                     while (op + 8 <= cpy)
                     {
                         Poke8(op, Peek8(match));
                         op += 8;
                         match += 8;
                     }
-                    if (op < cpy)
+                    // Byte-by-byte remainder (safe for overlapping small-offset copies)
+                    while (op < cpy)
                     {
-                        // Final overlapping 8-byte write
-                        Poke8(cpy - 8, Peek8(match + (cpy - op) - 8));
+                        *op++ = *match++;
                     }
-                    op = cpy;
+                    op = cpy; // when length <= 8, initial 8-byte setup already covers it
                 }
                 else
                 {
@@ -1343,7 +1343,7 @@ copyMatch:
 
         // Lookup tables for small offset copy optimization (from K4os)
         private static readonly int[] Inc32Table = { 0, 1, 2, 1, 0, 4, 4, 4 };
-        private static readonly int[] Dec64Table = { 0, 0, 0, -1, -4, 1, 2, 3 };
+        private static readonly int[] Dec64Table = { 0, 0, 0, -1, 0, 1, 2, 3 };
 
         /// <summary>
         /// 4-byte hash function (for small inputs &lt; 64KB)

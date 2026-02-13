@@ -234,5 +234,153 @@ namespace LZ4Sharp.Tests
             Assert.Equal(source.Length, decSize);
             Assert.Equal(source, decompressed);
         }
+
+        /// <summary>
+        /// Regression: small-offset match copy tail optimization read from before the
+        /// match region, corrupting byte 98 ('a' → 'x') with offset=1 RLE matches.
+        /// </summary>
+        [Fact]
+        public void Decompress_JsonWithRepeatedChars_NoCorruption()
+        {
+            var source = Encoding.UTF8.GetBytes(
+                "{\"id\":0,\"type\":\"message\"," +
+                "\"content\":\"This is message content number 0 with some repeated text aaaaaaaaaaaaa\"," +
+                "\"timestamp\":\"2026-01-01T00:00:00.000Z\"," +
+                "\"metadata\":{\"key1\":\"value1\",\"key2\":\"value2\"}}");
+
+            var compressed = new byte[LZ4Codec.CompressBound(source.Length)];
+            int compSize = LZ4Codec.CompressDefault(source, compressed, source.Length, compressed.Length);
+            Assert.True(compSize > 0);
+
+            var decompressed = new byte[source.Length];
+            int decSize = LZ4Codec.DecompressSafe(compressed, decompressed, compSize, decompressed.Length);
+            Assert.Equal(source.Length, decSize);
+            Assert.Equal(source, decompressed);
+        }
+
+        /// <summary>
+        /// Offset=1 (RLE) with various match lengths to exercise the small-offset
+        /// copy path with different tail sizes (0-7 remainder bytes).
+        /// </summary>
+        [Theory]
+        [InlineData(4)]   // minimum match, no loop/tail
+        [InlineData(8)]   // exact 8-byte initial copy
+        [InlineData(9)]   // 1 byte tail
+        [InlineData(12)]  // 4 byte tail (the original bug trigger)
+        [InlineData(15)]  // 7 byte tail
+        [InlineData(16)]  // one loop iteration, no tail
+        [InlineData(20)]  // one loop + 4 byte tail
+        [InlineData(100)] // many loop iterations + tail
+        [InlineData(300)] // large RLE
+        public void Decompress_Offset1_RLE_VariousLengths(int runLength)
+        {
+            // Construct input that forces offset=1 match of the specified length:
+            // a literal prefix followed by repeated bytes
+            var source = new byte[16 + runLength];
+            for (int i = 0; i < 16; i++) source[i] = (byte)('A' + i); // unique prefix
+            for (int i = 16; i < source.Length; i++) source[i] = 0x61; // 'a' repeated
+
+            var compressed = new byte[LZ4Codec.CompressBound(source.Length)];
+            int compSize = LZ4Codec.CompressDefault(source, compressed, source.Length, compressed.Length);
+            Assert.True(compSize > 0);
+
+            var decompressed = new byte[source.Length];
+            int decSize = LZ4Codec.DecompressSafe(compressed, decompressed, compSize, decompressed.Length);
+            Assert.Equal(source.Length, decSize);
+            Assert.Equal(source, decompressed);
+        }
+
+        /// <summary>
+        /// Tests small offsets 2-7 which exercise different Inc32Table/Dec64Table entries.
+        /// Each creates data with a repeating pattern of period=offset.
+        /// </summary>
+        [Theory]
+        [InlineData(2, 20)]
+        [InlineData(3, 20)]
+        [InlineData(4, 20)]   // Dec64Table[4] was -4 instead of 0
+        [InlineData(4, 100)]
+        [InlineData(5, 20)]
+        [InlineData(5, 100)]
+        [InlineData(6, 20)]
+        [InlineData(7, 20)]
+        [InlineData(2, 5)]    // very short match
+        [InlineData(3, 5)]
+        [InlineData(4, 5)]
+        [InlineData(7, 9)]    // tail = 1 byte
+        public void Decompress_SmallOffsets_VariousPatterns(int period, int repeatCount)
+        {
+            // Build a pattern that LZ4 will encode with the given small offset
+            var pattern = new byte[period];
+            for (int i = 0; i < period; i++)
+                pattern[i] = (byte)(0x30 + i); // '0','1','2',...
+
+            var source = new byte[period * repeatCount];
+            for (int i = 0; i < source.Length; i++)
+                source[i] = pattern[i % period];
+
+            var compressed = new byte[LZ4Codec.CompressBound(source.Length)];
+            int compSize = LZ4Codec.CompressDefault(source, compressed, source.Length, compressed.Length);
+            Assert.True(compSize > 0);
+
+            var decompressed = new byte[source.Length];
+            int decSize = LZ4Codec.DecompressSafe(compressed, decompressed, compSize, decompressed.Length);
+            Assert.Equal(source.Length, decSize);
+            Assert.Equal(source, decompressed);
+        }
+
+        /// <summary>
+        /// Tests with realistic payloads containing embedded repeated subsequences
+        /// that trigger back-references at various offsets and lengths.
+        /// </summary>
+        [Theory]
+        [InlineData("{\"a\":\"xxxxxxxxxxxx\",\"b\":\"xxxxxxxxxxxx\"}")]
+        [InlineData("abcabcabcabcabcabc")]
+        [InlineData("the quick brown fox jumps over the quick brown fox")]
+        [InlineData("AAAA BBBB AAAA BBBB AAAA BBBB AAAA BBBB")]
+        public void Decompress_RealisticPayloadsWithBackRefs(string text)
+        {
+            var source = Encoding.UTF8.GetBytes(text);
+            var compressed = new byte[LZ4Codec.CompressBound(source.Length)];
+            int compSize = LZ4Codec.CompressDefault(source, compressed, source.Length, compressed.Length);
+            Assert.True(compSize > 0);
+
+            var decompressed = new byte[source.Length];
+            int decSize = LZ4Codec.DecompressSafe(compressed, decompressed, compSize, decompressed.Length);
+            Assert.Equal(source.Length, decSize);
+            Assert.Equal(source, decompressed);
+        }
+
+        /// <summary>
+        /// Large payload with many back-references at different offsets to stress-test
+        /// the match copy paths comprehensively.
+        /// </summary>
+        [Theory]
+        [InlineData(1000)]
+        [InlineData(10000)]
+        [InlineData(100000)]
+        public void Decompress_LargeJsonPayload_RoundTrip(int messageCount)
+        {
+            var sb = new StringBuilder();
+            sb.Append('[');
+            for (int i = 0; i < messageCount; i++)
+            {
+                if (i > 0) sb.Append(',');
+                sb.Append($"{{\"id\":{i},\"type\":\"msg\",\"data\":\"");
+                // Mix in repeated runs of varying lengths
+                sb.Append(new string((char)('a' + (i % 26)), 5 + (i % 20)));
+                sb.Append("\"}}");
+            }
+            sb.Append(']');
+
+            var source = Encoding.UTF8.GetBytes(sb.ToString());
+            var compressed = new byte[LZ4Codec.CompressBound(source.Length)];
+            int compSize = LZ4Codec.CompressDefault(source, compressed, source.Length, compressed.Length);
+            Assert.True(compSize > 0);
+
+            var decompressed = new byte[source.Length];
+            int decSize = LZ4Codec.DecompressSafe(compressed, decompressed, compSize, decompressed.Length);
+            Assert.Equal(source.Length, decSize);
+            Assert.Equal(source, decompressed);
+        }
     }
 }

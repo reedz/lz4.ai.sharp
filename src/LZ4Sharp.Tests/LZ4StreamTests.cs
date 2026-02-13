@@ -700,4 +700,114 @@ public class LZ4StreamK4osInteropTests
 
         Assert.Equal(original, result.ToArray());
     }
+
+    /// <summary>
+    /// Regression: decompression silently corrupted data at back-reference boundaries
+    /// due to an invalid tail optimization in the small-offset match copy path.
+    /// </summary>
+    [Theory]
+    [InlineData(LZ4CompressionLevel.Fast)]
+    [InlineData(LZ4CompressionLevel.Level0)]
+    [InlineData(LZ4CompressionLevel.HC9)]
+    public void RoundTrip_JsonWithRepeatedChars_NoCorruption(LZ4CompressionLevel level)
+    {
+        var original = Encoding.UTF8.GetBytes(
+            "{\"id\":0,\"type\":\"message\"," +
+            "\"content\":\"This is message content number 0 with some repeated text aaaaaaaaaaaaa\"," +
+            "\"timestamp\":\"2026-01-01T00:00:00.000Z\"," +
+            "\"metadata\":{\"key1\":\"value1\",\"key2\":\"value2\"}}");
+
+        using var compressed = new MemoryStream();
+        using (var encoder = Streams.LZ4Stream.Encode(compressed, level, leaveOpen: true))
+        {
+            encoder.Write(original);
+        }
+
+        compressed.Position = 0;
+        using var decoder = Streams.LZ4Stream.Decode(compressed);
+        using var result = new MemoryStream();
+        decoder.CopyTo(result);
+
+        Assert.Equal(original, result.ToArray());
+    }
+
+    /// <summary>
+    /// Tests round-trip with payloads designed to trigger small-offset matches
+    /// (offsets 1-7) with varying tail sizes in the match copy.
+    /// </summary>
+    [Theory]
+    [InlineData(1, 50)]   // offset=1 RLE
+    [InlineData(2, 50)]
+    [InlineData(3, 50)]
+    [InlineData(4, 50)]   // Dec64Table[4] regression
+    [InlineData(5, 50)]
+    [InlineData(6, 50)]
+    [InlineData(7, 50)]
+    [InlineData(1, 200)]  // large RLE
+    [InlineData(4, 200)]
+    public void RoundTrip_SmallOffsetPatterns(int period, int totalLen)
+    {
+        var original = new byte[totalLen];
+        for (int i = 0; i < totalLen; i++)
+            original[i] = (byte)(0x41 + (i % period));
+
+        using var compressed = new MemoryStream();
+        using (var encoder = Streams.LZ4Stream.Encode(compressed, LZ4CompressionLevel.Fast, leaveOpen: true))
+        {
+            encoder.Write(original);
+        }
+
+        compressed.Position = 0;
+        using var decoder = Streams.LZ4Stream.Decode(compressed);
+        using var result = new MemoryStream();
+        decoder.CopyTo(result);
+
+        Assert.Equal(original, result.ToArray());
+    }
+
+    /// <summary>
+    /// Verify that decoding an empty stream does not throw but produces zero bytes.
+    /// </summary>
+    [Fact]
+    public void Decode_EmptyInput_ProducesZeroBytes()
+    {
+        using var empty = new MemoryStream(Array.Empty<byte>());
+        using var decoder = Streams.LZ4Stream.Decode(empty);
+        using var result = new MemoryStream();
+        decoder.CopyTo(result);
+
+        Assert.Empty(result.ToArray());
+    }
+
+    /// <summary>
+    /// Stress test: 1000 repeated JSON messages compressed and decompressed via stream.
+    /// </summary>
+    [Fact]
+    public void RoundTrip_RepeatedJsonMessages_1000()
+    {
+        var sb = new StringBuilder();
+        for (int i = 0; i < 1000; i++)
+        {
+            sb.Append($"{{\"id\":{i},\"type\":\"message\",\"content\":\"" +
+                      $"This is message content number {i} with some repeated text " +
+                      new string('a', 10 + (i % 20)) + "\"}}\n");
+        }
+        var original = Encoding.UTF8.GetBytes(sb.ToString());
+
+        using var compressed = new MemoryStream();
+        using (var encoder = Streams.LZ4Stream.Encode(compressed, LZ4CompressionLevel.Fast, leaveOpen: true))
+        {
+            using var input = new MemoryStream(original);
+            input.CopyTo(encoder);
+        }
+
+        _output.WriteLine($"Original: {original.Length}, Compressed: {compressed.Length}");
+
+        compressed.Position = 0;
+        using var decoder = Streams.LZ4Stream.Decode(compressed);
+        using var result = new MemoryStream();
+        decoder.CopyTo(result);
+
+        Assert.Equal(original, result.ToArray());
+    }
 }

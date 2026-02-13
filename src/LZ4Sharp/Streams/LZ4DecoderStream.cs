@@ -255,8 +255,12 @@ namespace LZ4Sharp.Streams
             Span<byte> header = stackalloc byte[19]; // Max header size
             int pos = 0;
 
-            // Read magic number (4 bytes)
-            ReadExact(header.Slice(0, 4));
+            // Read magic number (4 bytes) — empty stream means no frame
+            if (!TryReadExact(header.Slice(0, 4)))
+            {
+                _endOfFrame = true;
+                return;
+            }
             uint magic = BinaryPrimitives.ReadUInt32LittleEndian(header);
             if (magic != LZ4F_MAGICNUMBER)
                 throw new InvalidDataException($"Invalid LZ4 frame magic number: 0x{magic:X8}");
